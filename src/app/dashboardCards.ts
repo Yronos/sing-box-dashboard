@@ -1,4 +1,5 @@
 import type { IconName } from "../components/Icon";
+import { loadStoredJson, saveStoredJson } from "../lib/storage";
 import type { MessageKey } from "./translations";
 
 // Mirrors DashboardCard / DashboardCardConfiguration from sing-box-for-apple,
@@ -39,25 +40,20 @@ function isCardId(value: unknown): value is DashboardCardId {
 }
 
 export function loadDashboardCardsConfig(): DashboardCardsConfig {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<DashboardCardsConfig>;
-      const enabled = (parsed.enabled ?? []).filter(isCardId);
-      let order = (parsed.order ?? []).filter(isCardId);
-      // Cards added in newer versions are appended to a saved order, as the
-      // Apple client does on load.
-      order = order.concat(DEFAULT_CARD_ORDER.filter((card) => !order.includes(card)));
-      return { enabled, order };
-    }
-  } catch {
-    // fall through
+  const parsed = loadStoredJson(STORAGE_KEY) as Partial<DashboardCardsConfig> | null;
+  if (parsed) {
+    const enabled = (Array.isArray(parsed.enabled) ? parsed.enabled : []).filter(isCardId);
+    let order = (Array.isArray(parsed.order) ? parsed.order : []).filter(isCardId);
+    // Cards added in newer versions are appended to a saved order, as the
+    // Apple client does on load.
+    order = order.concat(DEFAULT_CARD_ORDER.filter((card) => !order.includes(card)));
+    return { enabled, order };
   }
   return { enabled: [...DEFAULT_CARD_ORDER], order: [...DEFAULT_CARD_ORDER] };
 }
 
 export function saveDashboardCardsConfig(config: DashboardCardsConfig) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  saveStoredJson(STORAGE_KEY, config);
 }
 
 export function resetDashboardCardsConfig(): DashboardCardsConfig {

@@ -1,3 +1,5 @@
+import { loadStoredJson, saveStoredJson } from "../lib/storage";
+
 export interface Server {
   id: string;
   name: string;
@@ -42,55 +44,41 @@ export function serverDisplayName(server: Server): string {
 }
 
 function migrateLegacy(): ServersState | null {
-  try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as { url?: string; secret?: string };
-    if (typeof parsed.url !== "string" || parsed.url === "") {
-      return null;
-    }
-    const server: Server = {
-      id: createServerId(),
-      name: "",
-      url: parsed.url,
-      secret: typeof parsed.secret === "string" ? parsed.secret : "",
-    };
-    return { servers: [server], activeId: server.id };
-  } catch {
+  const parsed = loadStoredJson(LEGACY_STORAGE_KEY) as { url?: string; secret?: string } | null;
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
+  if (!parsed || typeof parsed.url !== "string" || parsed.url === "") {
     return null;
-  } finally {
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
   }
+  const server: Server = {
+    id: createServerId(),
+    name: "",
+    url: parsed.url,
+    secret: typeof parsed.secret === "string" ? parsed.secret : "",
+  };
+  return { servers: [server], activeId: server.id };
 }
 
 export function loadServersState(): ServersState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<ServersState>;
-      const servers = (parsed.servers ?? []).filter(
-        (server): server is Server =>
-          typeof server === "object" &&
-          server !== null &&
-          typeof server.id === "string" &&
-          typeof server.url === "string" &&
-          server.url !== "",
-      );
-      const normalized = servers.map((server) => ({
-        ...server,
-        name: typeof server.name === "string" ? server.name : "",
-        secret: typeof server.secret === "string" ? server.secret : "",
-      }));
-      const activeId =
-        typeof parsed.activeId === "string" && normalized.some((server) => server.id === parsed.activeId)
-          ? parsed.activeId
-          : (normalized[0]?.id ?? null);
-      return { servers: normalized, activeId };
-    }
-  } catch {
-    // fall through
+  const parsed = loadStoredJson(STORAGE_KEY) as Partial<ServersState> | null;
+  if (parsed) {
+    const servers = (Array.isArray(parsed.servers) ? parsed.servers : []).filter(
+      (server): server is Server =>
+        typeof server === "object" &&
+        server !== null &&
+        typeof server.id === "string" &&
+        typeof server.url === "string" &&
+        server.url !== "",
+    );
+    const normalized = servers.map((server) => ({
+      ...server,
+      name: typeof server.name === "string" ? server.name : "",
+      secret: typeof server.secret === "string" ? server.secret : "",
+    }));
+    const activeId =
+      typeof parsed.activeId === "string" && normalized.some((server) => server.id === parsed.activeId)
+        ? parsed.activeId
+        : (normalized[0]?.id ?? null);
+    return { servers: normalized, activeId };
   }
   const migrated = migrateLegacy();
   if (migrated) {
@@ -101,5 +89,24 @@ export function loadServersState(): ServersState {
 }
 
 export function saveServersState(state: ServersState) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  saveStoredJson(STORAGE_KEY, state);
+}
+
+// Server list mutations shared by the Settings sub-page and the
+// connection-error takeover, so the activeId fallback rules stay identical.
+
+export function upsertServer(state: ServersState, server: Server): ServersState {
+  const exists = state.servers.some((entry) => entry.id === server.id);
+  const servers = exists
+    ? state.servers.map((entry) => (entry.id === server.id ? server : entry))
+    : [...state.servers, server];
+  return { servers, activeId: exists ? state.activeId : (state.activeId ?? server.id) };
+}
+
+export function removeServer(state: ServersState, id: string): ServersState {
+  const servers = state.servers.filter((entry) => entry.id !== id);
+  return {
+    servers,
+    activeId: state.activeId === id ? (servers[0]?.id ?? null) : state.activeId,
+  };
 }

@@ -27,7 +27,7 @@ import {
   type ThemePreference,
 } from "./app/context";
 import { dismissError, useCurrentError } from "./app/errorStore";
-import { useDismiss } from "./app/hooks";
+import { useDismiss, useUnaryOnce } from "./app/hooks";
 import { I18nProvider, useI18n } from "./app/i18n";
 import { Icon, type IconName } from "./components/Icon";
 import { Dialog } from "./components/ui";
@@ -192,7 +192,7 @@ function GlobalErrorDialog() {
     <Dialog onClose={dismissError}>
       <h3>{t("Error")}</h3>
       <p className="dialog-message">{message}</p>
-      <div className="row-actions" style={{ marginTop: 16 }}>
+      <div className="row-actions dialog-actions">
         <button
           className="button"
           onClick={() => {
@@ -250,7 +250,6 @@ function ShellContent(props: {
   const serviceStatus = useStream(api.serviceStatus);
   const groups = useStream(api.groups);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [version, setVersion] = useState<string | null>(null);
 
   // Latched while the daemon is unreachable: set as soon as the stream errors,
   // cleared only once it delivers again — the reconnect loop cycling back
@@ -268,23 +267,7 @@ function ShellContent(props: {
   // Fetch the version once the daemon is reachable; daemons predating
   // GetVersion reject with Unimplemented, leaving the subtitle absent.
   const reachable = serviceStatus.phase === "active";
-  useEffect(() => {
-    if (!reachable || version !== null) {
-      return;
-    }
-    let cancelled = false;
-    api.getVersion().then(
-      (value) => {
-        if (!cancelled && value) {
-          setVersion(value);
-        }
-      },
-      () => {},
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [api, reachable, version]);
+  const version = useUnaryOnce(() => api.getVersion(), reachable);
 
   // Mobile drawer: close whenever navigation lands on a new page.
   useEffect(() => {
@@ -408,7 +391,7 @@ function ShellContent(props: {
           <ServersView serversState={props.serversState} onServersChange={props.onServersChange} />
         )}
       </main>
-      <DeprecatedWarningsGate started={started} />
+      {started && <DeprecatedWarningsGate />}
     </div>
   );
 }
@@ -485,22 +468,7 @@ function ServerUptime() {
   const api = useApi();
   const { t, language } = useI18n();
   const now = useNow();
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-
-  useEffect(() => {
-    let stale = false;
-    api
-      .getStartedAt()
-      .then((value) => {
-        if (!stale) {
-          setStartedAt(value);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      stale = true;
-    };
-  }, [api]);
+  const startedAt = useUnaryOnce(() => api.getStartedAt());
 
   if (startedAt === null) {
     return null;
@@ -515,37 +483,15 @@ function ServerUptime() {
 
 // Mirrors GlobalChecksModifier in sing-box-for-apple: when the service
 // reaches the started state, fetch deprecated notes once and present them
-// as a chain of alerts.
-function DeprecatedWarningsGate(props: { started: boolean }) {
+// as a chain of alerts. Mounted only while the service runs, so a restart
+// remounts it and fetches the warnings again.
+function DeprecatedWarningsGate() {
   const api = useApi();
-  const [queue, setQueue] = useState<DeprecatedWarning[]>([]);
-  const [visible, setVisible] = useState(false);
-  const wasStarted = useRef(false);
+  const warnings = useUnaryOnce(() => api.getDeprecatedWarnings());
+  const [index, setIndex] = useState(0);
+  const [visible, setVisible] = useState(true);
 
-  useEffect(() => {
-    if (props.started === wasStarted.current) {
-      return;
-    }
-    wasStarted.current = props.started;
-    if (!props.started) {
-      return;
-    }
-    let stale = false;
-    api
-      .getDeprecatedWarnings()
-      .then((warnings) => {
-        if (!stale && warnings.length > 0) {
-          setQueue(warnings);
-          setVisible(true);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      stale = true;
-    };
-  }, [api, props.started]);
-
-  const current = queue[0];
+  const current = warnings?.[index];
   if (!current || !visible) {
     return null;
   }
@@ -553,7 +499,7 @@ function DeprecatedWarningsGate(props: { started: boolean }) {
   const dismiss = () => {
     setVisible(false);
     setTimeout(() => {
-      setQueue((value) => value.slice(1));
+      setIndex((value) => value + 1);
       setVisible(true);
     }, 300);
   };
@@ -567,7 +513,7 @@ function DeprecatedWarningDialog(props: { warning: DeprecatedWarning; onDismiss:
     <Dialog onClose={props.onDismiss}>
       <h3>{t("Deprecated Warning")}</h3>
       <p className="dialog-message">{props.warning.message}</p>
-      <div className="row-actions" style={{ marginTop: 16 }}>
+      <div className="row-actions dialog-actions">
         <button className="button" onClick={props.onDismiss}>
           {t("Ok")}
         </button>

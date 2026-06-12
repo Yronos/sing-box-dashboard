@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { LANGUAGES, TRANSLATIONS, type Language, type MessageKey } from "./translations";
+import { LANGUAGES, TRANSLATIONS, type Language, type MessageKey, type PluralForms } from "./translations";
 
 export type { Language, MessageKey };
 
@@ -56,8 +56,27 @@ function applyLanguage(language: Language) {
 export type TranslateParams = Record<string, string | number>;
 export type Translate = (key: MessageKey, params?: TranslateParams) => string;
 
+const pluralRulesCache = new Map<Language, Intl.PluralRules>();
+
+function pluralRules(language: Language): Intl.PluralRules {
+  let rules = pluralRulesCache.get(language);
+  if (!rules) {
+    rules = new Intl.PluralRules(language);
+    pluralRulesCache.set(language, rules);
+  }
+  return rules;
+}
+
 function translate(language: Language, key: MessageKey, params?: TranslateParams): string {
-  let text: string = language === "en" ? key : (TRANSLATIONS[key]?.[language] ?? key);
+  const entry: string | PluralForms = language === "en" ? key : (TRANSLATIONS[key]?.[language] ?? key);
+  let text: string;
+  if (typeof entry === "string") {
+    text = entry;
+  } else {
+    // Plural-aware translations pick their form from the {count} parameter.
+    const count = typeof params?.count === "number" ? params.count : null;
+    text = (count !== null ? entry[pluralRules(language).select(count)] : undefined) ?? entry.other;
+  }
   if (params) {
     for (const [name, value] of Object.entries(params)) {
       text = text.replaceAll(`{${name}}`, String(value));

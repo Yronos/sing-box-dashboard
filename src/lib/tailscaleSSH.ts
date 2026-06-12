@@ -6,7 +6,9 @@
 // prompt entirely (quick connect) and lists the peer in the terminal
 // session manager's New Session menu.
 
-import type { TailscalePeer } from "../gen/daemon/started_service_pb";
+import type { TailscaleEndpointStatus, TailscalePeer } from "../gen/daemon/started_service_pb";
+
+import { loadStoredJson, saveStoredJson } from "./storage";
 
 export interface TailscaleSSHPrefs {
   username: string;
@@ -28,16 +30,9 @@ export const SSH_DEFAULT_USERNAME = "root";
 export const SSH_DEFAULT_TERMINAL_TYPE = "xterm-256color";
 
 export function loadSSHPrefs(): Record<string, TailscaleSSHPrefs> {
-  try {
-    const raw = localStorage.getItem(SSH_PREFS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Record<string, TailscaleSSHPrefs>;
-      if (parsed && typeof parsed === "object") {
-        return parsed;
-      }
-    }
-  } catch {
-    // fall through
+  const parsed = loadStoredJson(SSH_PREFS_KEY);
+  if (parsed && typeof parsed === "object") {
+    return parsed as Record<string, TailscaleSSHPrefs>;
   }
   return {};
 }
@@ -45,7 +40,11 @@ export function loadSSHPrefs(): Record<string, TailscaleSSHPrefs> {
 export function saveSSHPrefs(stableID: string, prefs: TailscaleSSHPrefs) {
   const map = loadSSHPrefs();
   map[stableID] = prefs;
-  localStorage.setItem(SSH_PREFS_KEY, JSON.stringify(map));
+  saveStoredJson(SSH_PREFS_KEY, map);
+}
+
+export function allPeers(endpoint: TailscaleEndpointStatus | undefined): TailscalePeer[] {
+  return endpoint?.userGroups.flatMap((group) => group.peers) ?? [];
 }
 
 export function peerDisplayName(peer: TailscalePeer | undefined): string {

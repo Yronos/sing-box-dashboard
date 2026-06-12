@@ -4,10 +4,11 @@ import { proxyDisplayType, urlTestDelayTone } from "../api/format";
 import { useStream } from "../api/stream";
 import { useApi } from "../app/context";
 import { showError } from "../app/errorStore";
+import { usePendingValue } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
-import { StreamBanner } from "../components/StreamBanner";
-import { Badge, Card, EmptyState, Spinner } from "../components/ui";
+import { StreamStates } from "../components/StreamBanner";
+import { Badge, Card, Spinner } from "../components/ui";
 import type { Group, GroupItem } from "../gen/daemon/started_service_pb";
 
 export function GroupsView() {
@@ -20,11 +21,14 @@ export function GroupsView() {
       <div className="page-header">
         <h1 className="page-title">{t("Groups")}</h1>
       </div>
-      <StreamBanner snapshot={groups} subject="groups" />
-      {groups.data.loaded && groups.data.groups.length === 0 && (
-        <EmptyState icon="folder">{t("Empty groups")}</EmptyState>
-      )}
-      {!groups.data.loaded && groups.phase !== "error" && <EmptyState>{t("Loading...")}</EmptyState>}
+      <StreamStates
+        snapshot={groups}
+        subject="groups"
+        loaded={groups.data.loaded}
+        empty={groups.data.groups.length === 0}
+        emptyIcon="folder"
+        emptyMessage={t("Empty groups")}
+      />
       {groups.data.groups.map((group) => (
         <GroupCard key={group.tag} group={group} />
       ))}
@@ -36,15 +40,9 @@ function GroupCard(props: { group: Group }) {
   const api = useApi();
   const { t } = useI18n();
   const group = props.group;
-  const [expandOverride, setExpandOverride] = useState<boolean | null>(null);
   const [testing, setTesting] = useState(false);
-  const [pendingSelection, setPendingSelection] = useState<string | null>(null);
-
-  const expanded = expandOverride ?? group.isExpand;
-  const selected = pendingSelection ?? group.selected;
-  if (pendingSelection !== null && group.selected === pendingSelection) {
-    setPendingSelection(null);
-  }
+  const [expanded, setExpandOverride] = usePendingValue(group.isExpand);
+  const [selected, setPendingSelection] = usePendingValue(group.selected);
 
   const toggleExpand = () => {
     const next = !expanded;

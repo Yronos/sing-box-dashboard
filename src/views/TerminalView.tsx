@@ -15,6 +15,7 @@ import {
   TailscaleSSHServerMessageSchema,
 } from "../gen/daemon/started_service_pb";
 import {
+  allPeers,
   buildSSHSession,
   loadSSHPrefs,
   peerDisplayName,
@@ -40,9 +41,7 @@ export function TailscaleSSHView(props: {
   const [initialSession, setInitialSession] = useState<SSHSessionOptions | null>(null);
 
   const endpoint = tailscale.data.endpoints.find((entry) => entry.endpointTag === props.tag);
-  const peer = endpoint?.userGroups
-    .flatMap((group) => group.peers)
-    .find((entry) => entry.stableID === props.peerID);
+  const peer = allPeers(endpoint).find((entry) => entry.stableID === props.peerID);
 
   // Latch the session options from the first status delivery: later stream
   // updates (peers flapping online/offline) must not tear down the live
@@ -193,14 +192,12 @@ function TerminalContainer(props: {
   // of the active session — the candidates for New Session.
   const prefs = loadSSHPrefs();
   const endpoint = tailscale.data.endpoints.find((entry) => entry.endpointTag === props.tag);
-  const rememberedPeers = (endpoint?.userGroups ?? [])
-    .flatMap((group) => group.peers)
-    .filter(
-      (peer) =>
-        prefs[peer.stableID]?.remember &&
-        peerSSHAvailable(peer) &&
-        peerSSHAddress(peer) !== active?.options.peerAddress,
-    );
+  const rememberedPeers = allPeers(endpoint).filter(
+    (peer) =>
+      prefs[peer.stableID]?.remember &&
+      peerSSHAvailable(peer) &&
+      peerSSHAddress(peer) !== active?.options.peerAddress,
+  );
 
   const duplicateSession = () => {
     if (active) {
@@ -209,9 +206,7 @@ function TerminalContainer(props: {
   };
 
   const openRememberedPeer = (stableID: string) => {
-    const peer = (endpoint?.userGroups ?? [])
-      .flatMap((group) => group.peers)
-      .find((entry) => entry.stableID === stableID);
+    const peer = allPeers(endpoint).find((entry) => entry.stableID === stableID);
     if (!peer) {
       return;
     }

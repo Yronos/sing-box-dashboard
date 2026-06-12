@@ -7,14 +7,14 @@ import { showError } from "../app/errorStore";
 import { useStreamingAction } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import { Icon, type IconName } from "../components/Icon";
-import { StreamBanner } from "../components/StreamBanner";
+import { StreamStates } from "../components/StreamBanner";
 import {
   Badge,
   Card,
   CopyValue,
   DataLine,
+  DetailShell,
   Dialog,
-  Drawer,
   EmptyState,
   Field,
   MenuItem,
@@ -30,6 +30,7 @@ import type {
   TailscalePingResponse,
 } from "../gen/daemon/started_service_pb";
 import {
+  allPeers,
   buildSSHSession,
   loadSSHPrefs,
   peerDisplayName,
@@ -54,13 +55,13 @@ export function TailscaleEndpointView(props: { tag: string }) {
   const [search, setSearch] = useState("");
 
   const endpoint = tailscale.data.endpoints.find((entry) => entry.endpointTag === props.tag);
-  const allPeers = endpoint?.userGroups.flatMap((group) => group.peers) ?? [];
-  const exitNodeCandidates = allPeers.filter((peer) => peer.exitNodeOption);
+  const peers = allPeers(endpoint);
+  const exitNodeCandidates = peers.filter((peer) => peer.exitNodeOption);
   const running = endpoint?.backendState === "Running";
   const detailPeer =
     peerDetail === "self"
       ? endpoint?.self
-      : allPeers.find((peer) => peer.stableID === peerDetail);
+      : peers.find((peer) => peer.stableID === peerDetail);
 
   // On desktop SSH opens a dedicated popup browser window, mirroring
   // openWindow on macOS; the session is encoded in the URL so the window is
@@ -133,30 +134,35 @@ export function TailscaleEndpointView(props: { tag: string }) {
 
   // On mobile the peer detail replaces the endpoint page as a pushed
   // sub-page, like the Tools sub-pages; on desktop it stays a side drawer.
-  if (isMobile && endpoint && detailPeer) {
-    return (
-      <div className="page">
-        <div className="page-header">
-          <button className="back-button" onClick={() => setPeerDetail(null)}>
-            <Icon name="arrow_back" size={15} />
-            Tailscale
-          </button>
-          <h1 className="page-title">{peerDisplayName(detailPeer)}</h1>
-        </div>
+  const detail = endpoint && detailPeer && (
+    <DetailShell
+      backLabel="Tailscale"
+      title={peerDisplayName(detailPeer)}
+      subtitle={
         <div className="hint" style={{ display: "flex", alignItems: "center", gap: 7 }}>
           <span className={`state-dot ${detailPeer.online ? "good" : ""}`} />
           {detailPeer.online ? t("Connected") : t("Not connected")}
         </div>
-        <PeerDetailBody
-          endpoint={endpoint}
-          peer={detailPeer}
-          isSelf={peerDetail === "self"}
-          onClose={() => setPeerDetail(null)}
-          onConnectSSH={() => connectSSH(detailPeer)}
-          onEditSSH={() => setSSHPromptPeer(detailPeer)}
-        />
+      }
+      onClose={() => setPeerDetail(null)}
+    >
+      <PeerDetailBody
+        endpoint={endpoint}
+        peer={detailPeer}
+        isSelf={peerDetail === "self"}
+        onClose={() => setPeerDetail(null)}
+        onConnectSSH={() => connectSSH(detailPeer)}
+        onEditSSH={() => setSSHPromptPeer(detailPeer)}
+      />
+    </DetailShell>
+  );
+
+  if (isMobile && detail) {
+    return (
+      <>
+        {detail}
         {dialogs}
-      </div>
+      </>
     );
   }
 
@@ -165,13 +171,14 @@ export function TailscaleEndpointView(props: { tag: string }) {
       <ToolsPageHeader
         title={props.tag === "" ? "Tailscale" : t("Tailscale: {tag}", { tag: props.tag })}
       />
-      <StreamBanner snapshot={tailscale} subject="Tailscale status" />
-      {!tailscale.data.loaded && tailscale.phase !== "error" && (
-        <EmptyState>{t("Loading...")}</EmptyState>
-      )}
-      {tailscale.data.loaded && !endpoint && (
-        <EmptyState icon="hub">{t("Endpoint not found")}</EmptyState>
-      )}
+      <StreamStates
+        snapshot={tailscale}
+        subject="Tailscale status"
+        loaded={tailscale.data.loaded}
+        empty={!endpoint}
+        emptyIcon="hub"
+        emptyMessage={t("Endpoint not found")}
+      />
       {endpoint && (
         <div className="settings-stack">
           <StatusCard
@@ -194,16 +201,7 @@ export function TailscaleEndpointView(props: { tag: string }) {
           )}
         </div>
       )}
-      {endpoint && detailPeer && (
-        <PeerDetail
-          endpoint={endpoint}
-          peer={detailPeer}
-          isSelf={peerDetail === "self"}
-          onClose={() => setPeerDetail(null)}
-          onConnectSSH={() => connectSSH(detailPeer)}
-          onEditSSH={() => setSSHPromptPeer(detailPeer)}
-        />
-      )}
+      {detail}
       {dialogs}
     </div>
   );
@@ -383,28 +381,6 @@ function PeerRow(props: { peer: TailscalePeer; onOpen: () => void; onConnectSSH?
         </OthersMenu>
       )}
     </div>
-  );
-}
-
-function PeerDetail(props: {
-  endpoint: TailscaleEndpointStatus;
-  peer: TailscalePeer;
-  isSelf: boolean;
-  onClose: () => void;
-  onConnectSSH: () => void;
-  onEditSSH: () => void;
-}) {
-  const { t } = useI18n();
-  const peer = props.peer;
-  return (
-    <Drawer onClose={props.onClose}>
-      <h3>
-        <span className={`state-dot ${peer.online ? "good" : ""}`} />
-        {peerDisplayName(peer)}
-      </h3>
-      <div className="hint">{peer.online ? t("Connected") : t("Not connected")}</div>
-      <PeerDetailBody {...props} />
-    </Drawer>
   );
 }
 
@@ -688,7 +664,7 @@ function SSHPrompt(props: {
           )}
         </div>
       </div>
-      <div className="row-actions" style={{ marginTop: 14 }}>
+      <div className="row-actions dialog-actions">
         <button className="button" onClick={props.onCancel}>
           {t("Cancel")}
         </button>

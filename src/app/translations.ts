@@ -5,6 +5,11 @@
 export type Language = "en" | "zh-Hans" | "zh-Hant" | "fa" | "ru";
 export type TranslatedLanguage = Exclude<Language, "en">;
 
+// A translation whose wording varies with the {count} parameter, keyed by
+// the CLDR plural categories Intl.PluralRules reports for the language;
+// "other" is the required fallback (also used when no count is passed).
+export type PluralForms = Partial<Record<Intl.LDMLPluralRule, string>> & { other: string };
+
 export const LANGUAGES: { value: Language; label: string }[] = [
   { value: "en", label: "English" },
   { value: "zh-Hans", label: "简体中文" },
@@ -131,7 +136,7 @@ export const TRANSLATIONS = {
     "ru": "Для отслеживания подключений в запущенном экземпляре должен быть настроен Clash API.",
   },
   "Empty connections": { "zh-Hans": "无连接", "zh-Hant": "無連接", "fa": "بدون اتصال", "ru": "Нет подключений" },
-  "Showing first {limit} of {count} connections": { "zh-Hans": "仅显示前 {limit} 个连接（共 {count} 个）", "zh-Hant": "僅顯示前 {limit} 個連接（共 {count} 個）", "fa": "نمایش {limit} اتصال نخست از {count}", "ru": "Показаны первые {limit} из {count} подключений" },
+  "Showing first {limit} of {count} connections": { "zh-Hans": "仅显示前 {limit} 个连接（共 {count} 个）", "zh-Hant": "僅顯示前 {limit} 個連接（共 {count} 個）", "fa": "نمایش {limit} اتصال نخست از {count}", "ru": { one: "Показаны первые {limit} из {count} подключения", other: "Показаны первые {limit} из {count} подключений" } },
   "Connection": { "zh-Hans": "连接", "zh-Hant": "連接", "fa": "اتصال", "ru": "Подключение" },
   "Traffic": { "zh-Hans": "流量", "zh-Hant": "流量", "fa": "ترافیک", "ru": "Трафик" },
   "Created at": { "zh-Hans": "创建时间", "zh-Hant": "創建時間", "fa": "زمان ایجاد", "ru": "Время создания" },
@@ -177,7 +182,7 @@ export const TRANSLATIONS = {
   "STUN Test": { "zh-Hans": "STUN 测试", "zh-Hant": "STUN 測試", "fa": "تست STUN", "ru": "STUN-тест" },
   "Configuration URL": { "zh-Hans": "配置 URL", "zh-Hant": "配置 URL", "fa": "URL پیکربندی", "ru": "URL конфигурации" },
   "Max runtime": { "zh-Hans": "最大运行时间", "zh-Hant": "最大執行時間", "fa": "حداکثر زمان اجرا", "ru": "Макс. время" },
-  "{count} seconds": { "zh-Hans": "{count} 秒", "zh-Hant": "{count} 秒", "fa": "{count} ثانیه", "ru": "{count} с" },
+  "{count} seconds": { "zh-Hans": "{count} 秒", "zh-Hant": "{count} 秒", "fa": "{count} ثانیه", "ru": { one: "{count} секунда", few: "{count} секунды", many: "{count} секунд", other: "{count} секунды" } },
   "Serial": { "zh-Hans": "串行", "zh-Hant": "序列", "fa": "ترتیبی", "ru": "Последовательно" },
   "Start test": { "zh-Hans": "开始测试", "zh-Hant": "開始測試", "fa": "شروع تست", "ru": "Начать тест" },
   "Cancel test": { "zh-Hans": "取消测试", "zh-Hant": "取消測試", "fa": "لغو تست", "ru": "Отменить тест" },
@@ -252,6 +257,6 @@ export const TRANSLATIONS = {
   // shared chrome
   "Others": { "zh-Hans": "其他", "zh-Hant": "其他", "fa": "سایر", "ru": "Другое" },
   "Copy": { "zh-Hans": "复制", "zh-Hant": "複製", "fa": "کپی", "ru": "Копировать" },
-} as const satisfies Record<string, Record<TranslatedLanguage, string>>;
+} as const satisfies Record<string, Record<TranslatedLanguage, string | PluralForms>>;
 
 export type MessageKey = keyof typeof TRANSLATIONS;

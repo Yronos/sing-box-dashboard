@@ -779,6 +779,11 @@ a:hover {
   overflow-wrap: anywhere;
 }
 
+.data-line .value.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .metric {
   font-size: 22px;
   font-weight: 560;
@@ -1162,6 +1167,8 @@ a:hover {
   padding: 9px 4px;
   font-size: 13px;
   border-radius: 8px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .card-manage-row + .card-manage-row {
@@ -1177,6 +1184,13 @@ a:hover {
   display: inline-flex;
   color: var(--text-faint);
   cursor: grab;
+  /* The handle drives pointer-event reordering; without this, touch input
+     would scroll the dialog instead of dragging the row. */
+  touch-action: none;
+}
+
+.card-manage-row.dragging .drag-handle {
+  cursor: grabbing;
 }
 
 .card-manage-row > .icon {
@@ -1846,27 +1860,33 @@ a:hover {
   border-radius: 2px;
 }
 
-/* ---------- drawer / dialog ---------- */
+/* ---------- drawer / dialog ----------
 
-.overlay {
-  position: fixed;
-  inset: env(safe-area-inset-top, 0px) 0 0 0;
-  background: rgba(0, 0, 0, 0.32);
-  display: flex;
-  justify-content: flex-end;
-  z-index: 40;
-}
+   Both are native <dialog> elements shown with showModal(): the dim overlay
+   is the ::backdrop, stacking comes from the top layer, and the panel styles
+   apply to the element itself (resetting the UA dialog defaults). The top
+   inset keeps them below the iOS safe area like the old overlays did. */
 
 .drawer {
+  inset: env(safe-area-inset-top, 0px) 0 0 0;
+  margin: 0;
+  margin-inline-start: auto;
+  height: auto;
+  max-height: none;
   width: 420px;
   max-width: 92vw;
-  height: 100%;
   background: var(--bg);
+  color: inherit;
+  border: 0;
   border-inline-start: 1px solid var(--border);
   box-shadow: var(--shadow-overlay);
   padding: 22px 24px;
   overflow-y: auto;
   animation: slide-in 0.18s ease;
+}
+
+.drawer::backdrop {
+  background: rgba(0, 0, 0, 0.32);
 }
 
 @keyframes slide-in {
@@ -1906,28 +1926,24 @@ a:hover {
   margin: 18px 0 6px;
 }
 
-.dialog-overlay {
-  position: fixed;
-  inset: env(safe-area-inset-top, 0px) 0 0 0;
-  background: rgba(0, 0, 0, 0.36);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  padding: 24px;
-}
-
 .dialog {
+  inset: env(safe-area-inset-top, 0px) 0 0 0;
+  margin: auto;
   background: var(--bg);
+  color: inherit;
   border: 1px solid var(--border);
   border-radius: 18px;
   box-shadow: var(--shadow-overlay);
   padding: 22px 24px;
   width: 480px;
-  max-width: 100%;
+  max-width: calc(100% - 48px);
   max-height: 90vh;
   overflow-y: auto;
   animation: dialog-in 0.18s ease-out;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.36);
 }
 
 @keyframes dialog-in {
@@ -2169,6 +2185,11 @@ body:has(> #root > .page.terminal-page) {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+/* Footer button row of a dialog, below the message or form fields. */
+.row-actions.dialog-actions {
+  margin-top: 14px;
 }
 
 .peer-row {
@@ -2492,12 +2513,9 @@ a.nav-line {
     padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
   }
 
-  .dialog-overlay {
-    padding: 14px;
-  }
-
   .dialog {
     padding: 18px 16px;
+    max-width: calc(100% - 28px);
     max-height: 88dvh;
   }
 

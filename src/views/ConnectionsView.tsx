@@ -8,8 +8,8 @@ import { useApi, useIsMobile } from "../app/context";
 import { showError } from "../app/errorStore";
 import { useI18n, type MessageKey } from "../app/i18n";
 import { Icon } from "../components/Icon";
-import { StreamBanner } from "../components/StreamBanner";
-import { Badge, Drawer, EmptyState, MenuItem, MenuLabel, OthersMenu, SearchInput } from "../components/ui";
+import { StreamStates } from "../components/StreamBanner";
+import { Badge, DataLine, DetailShell, MenuItem, MenuLabel, OthersMenu, SearchInput } from "../components/ui";
 
 type StateFilter = "all" | "active" | "closed";
 type SortMode = "date" | "traffic" | "trafficTotal";
@@ -79,11 +79,26 @@ export function ConnectionsView() {
   }, [connections.data.rows, stateFilter, sortMode, search]);
 
   const detailRow = detailId !== null ? (connections.data.rows.get(detailId) ?? null) : null;
+  const detailActive = detailRow?.closedAt === null;
+  const detail = detailRow && (
+    <DetailShell
+      backLabel={t("Connections")}
+      title={t("Connection")}
+      accessory={
+        <Badge tone={detailActive ? "good" : "danger"}>
+          {detailActive ? t("Active") : t("Closed")}
+        </Badge>
+      }
+      onClose={() => setDetailId(null)}
+    >
+      <ConnectionDetailBody row={detailRow} onClose={() => setDetailId(null)} />
+    </DetailShell>
+  );
 
   // On mobile the detail replaces the list as a pushed sub-page, like the
   // Tools sub-pages; on desktop it stays a side drawer over the list.
-  if (isMobile && detailRow) {
-    return <ConnectionDetailPage row={detailRow} onClose={() => setDetailId(null)} />;
+  if (isMobile && detail) {
+    return detail;
   }
 
   return (
@@ -129,17 +144,18 @@ export function ConnectionsView() {
       <div className="field">
         <SearchInput value={search} onChange={setSearch} />
       </div>
-      <StreamBanner snapshot={connections} subject="connections" />
+      <StreamStates
+        snapshot={connections}
+        subject="connections"
+        loaded={connections.data.loaded}
+        empty={rows.length === 0}
+        emptyIcon="swap_vert"
+        emptyMessage={t("Empty connections")}
+      />
       {connections.errorCode === Code.Unimplemented && connections.phase === "error" && (
         <div className="hint" style={{ marginBottom: 12 }}>
           {t("Connection tracking requires the Clash API to be configured in the running instance.")}
         </div>
-      )}
-      {connections.data.loaded && rows.length === 0 && (
-        <EmptyState icon="swap_vert">{t("Empty connections")}</EmptyState>
-      )}
-      {!connections.data.loaded && connections.phase !== "error" && (
-        <EmptyState>{t("Loading...")}</EmptyState>
       )}
       {rows.slice(0, 500).map((row) => (
         <ConnectionRowView key={row.connection.id} row={row} onOpen={setDetailId} />
@@ -149,7 +165,7 @@ export function ConnectionsView() {
           {t("Showing first {limit} of {count} connections", { limit: 500, count: rows.length })}
         </div>
       )}
-      {detailRow && <ConnectionDetail row={detailRow} onClose={() => setDetailId(null)} />}
+      {detail}
     </div>
   );
 }
@@ -268,42 +284,6 @@ const ConnectionRowView = memo(function ConnectionRowView(props: {
   );
 });
 
-function ConnectionDetail(props: { row: ConnectionRow; onClose: () => void }) {
-  const { t } = useI18n();
-  const active = props.row.closedAt === null;
-  return (
-    <Drawer onClose={props.onClose}>
-      <h3>
-        {t("Connection")}
-        <span style={{ marginInlineStart: "auto" }}>
-          <Badge tone={active ? "good" : "danger"}>{active ? t("Active") : t("Closed")}</Badge>
-        </span>
-      </h3>
-      <ConnectionDetailBody row={props.row} onClose={props.onClose} />
-    </Drawer>
-  );
-}
-
-function ConnectionDetailPage(props: { row: ConnectionRow; onClose: () => void }) {
-  const { t } = useI18n();
-  const active = props.row.closedAt === null;
-  return (
-    <div className="page">
-      <div className="page-header">
-        <button className="back-button" onClick={props.onClose}>
-          <Icon name="arrow_back" size={15} />
-          {t("Connections")}
-        </button>
-        <h1 className="page-title">{t("Connection")}</h1>
-        <div className="actions">
-          <Badge tone={active ? "good" : "danger"}>{active ? t("Active") : t("Closed")}</Badge>
-        </div>
-      </div>
-      <ConnectionDetailBody row={props.row} onClose={props.onClose} />
-    </div>
-  );
-}
-
 function ConnectionDetailBody(props: { row: ConnectionRow; onClose: () => void }) {
   const api = useApi();
   const { t, language } = useI18n();
@@ -373,12 +353,5 @@ function Line(props: { label: string; value: string }) {
   if (props.value === "") {
     return null;
   }
-  return (
-    <div className="data-line">
-      <span className="label">{props.label}</span>
-      <span className="value" style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-        {props.value}
-      </span>
-    </div>
-  );
+  return <DataLine label={props.label} value={props.value} mono />;
 }

@@ -6,12 +6,13 @@ import {
   ACCENT_PRESETS,
   isAccentPreset,
   normalizeAccentColor,
+  useIsMobile,
   type AccentPreference,
   type AccentPreset,
   type ThemePreference,
 } from "../app/context";
 import { showError } from "../app/errorStore";
-import { useDismiss, useEscapeToClose } from "../app/hooks";
+import { useDismiss } from "../app/hooks";
 import { useI18n, type MessageKey } from "../app/i18n";
 import { Icon, type IconName } from "./Icon";
 
@@ -30,11 +31,11 @@ export function Card(props: { icon?: IconName; title?: ReactNode; actions?: Reac
   );
 }
 
-export function DataLine(props: { label: ReactNode; value: ReactNode }) {
+export function DataLine(props: { label: ReactNode; value: ReactNode; mono?: boolean }) {
   return (
     <div className="data-line">
       <span className="label">{props.label}</span>
-      <span className="value">{props.value}</span>
+      <span className={props.mono ? "value mono" : "value"}>{props.value}</span>
     </div>
   );
 }
@@ -508,43 +509,119 @@ export function QRCode(props: { value: string }) {
   );
 }
 
+// Dialog and Drawer render as native <dialog> elements: showModal provides
+// the focus trap, Escape handling (the cancel event), and top-layer stacking
+// the old hand-rolled overlays lacked. Both are mounted only while open.
+function useShowModal() {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) {
+      return;
+    }
+    // showModal moves focus to the first focusable element; if React's
+    // autoFocus already landed on a specific field (e.g. the URL input in
+    // the server dialog), put it back.
+    const focused = document.activeElement;
+    dialog.showModal();
+    if (focused instanceof HTMLElement && dialog.contains(focused)) {
+      focused.focus();
+    }
+    // close() (rather than plain removal) restores focus to the opener.
+    return () => dialog.close();
+  }, []);
+  return ref;
+}
+
+// A click that lands on the ::backdrop targets the dialog element itself
+// with coordinates outside its box — clicks on the dialog's own padding
+// also target it, so the coordinate check tells them apart.
+function closeOnBackdropClick(event: React.MouseEvent<HTMLDialogElement>, onClose: () => void) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  const rect = event.currentTarget.getBoundingClientRect();
+  const inside =
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom;
+  if (!inside) {
+    onClose();
+  }
+}
+
 export function Drawer(props: { onClose: () => void; children: ReactNode }) {
-  useEscapeToClose(props.onClose);
+  const ref = useShowModal();
   return (
-    <div
-      className="overlay"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) {
-          props.onClose();
-        }
+    <dialog
+      ref={ref}
+      className="drawer"
+      onCancel={(event) => {
+        event.preventDefault();
+        props.onClose();
       }}
+      onClick={(event) => closeOnBackdropClick(event, props.onClose)}
     >
-      <div className="drawer" role="dialog" aria-modal="true">
-        {props.children}
-      </div>
-    </div>
+      {props.children}
+    </dialog>
   );
 }
 
 export function Dialog(props: { onClose: () => void; className?: string; children: ReactNode }) {
-  useEscapeToClose(props.onClose);
+  const ref = useShowModal();
   return (
-    <div
-      className="dialog-overlay"
-      onClick={(event) => {
-        if (event.target === event.currentTarget) {
-          props.onClose();
-        }
+    <dialog
+      ref={ref}
+      className={props.className ? `dialog ${props.className}` : "dialog"}
+      onCancel={(event) => {
+        event.preventDefault();
+        props.onClose();
       }}
+      onClick={(event) => closeOnBackdropClick(event, props.onClose)}
     >
-      <div
-        className={props.className ? `dialog ${props.className}` : "dialog"}
-        role="dialog"
-        aria-modal="true"
-      >
+      {props.children}
+    </dialog>
+  );
+}
+
+// Detail presentation shared by the connection and Tailscale peer details:
+// a side drawer over the list on desktop, a pushed full page with a back
+// button on mobile (like the Tools sub-pages).
+export function DetailShell(props: {
+  backLabel: string;
+  title: ReactNode;
+  accessory?: ReactNode;
+  subtitle?: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const isMobile = useIsMobile();
+  if (isMobile) {
+    return (
+      <div className="page">
+        <div className="page-header">
+          <button className="back-button" onClick={props.onClose}>
+            <Icon name="arrow_back" size={15} />
+            {props.backLabel}
+          </button>
+          <h1 className="page-title">{props.title}</h1>
+          {props.accessory && <div className="actions">{props.accessory}</div>}
+        </div>
+        {props.subtitle}
         {props.children}
       </div>
-    </div>
+    );
+  }
+  return (
+    <Drawer onClose={props.onClose}>
+      <h3>
+        {props.title}
+        {props.accessory && <span style={{ marginInlineStart: "auto" }}>{props.accessory}</span>}
+      </h3>
+      {props.subtitle}
+      {props.children}
+    </Drawer>
   );
 }
 

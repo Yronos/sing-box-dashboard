@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 
-// Overlays and menus register here while open; Escape dismisses only the
-// topmost one, so e.g. a menu open inside a dialog closes before the dialog.
+// Menus register here while open; Escape dismisses only the topmost one.
+// Dialogs and drawers are native <dialog> elements that close through their
+// cancel event instead — the preventDefault below also stops that default
+// action, so a menu open inside a dialog closes before the dialog does.
 const escapeStack: (() => void)[] = [];
 
 function useEscapeEntry(active: boolean, onDismiss: () => void) {
@@ -56,9 +58,45 @@ export function useDismiss(
   }, [ref, open]);
 }
 
-// For overlays that are mounted only while open (Dialog, Drawer).
-export function useEscapeToClose(onClose: () => void) {
-  useEscapeEntry(true, onClose);
+// Optimistic pending value for fire-and-forget selections (Clash mode, group
+// outbound, group expand): the UI shows the value the user picked right away
+// and drops it once the stream confirms the server reached it; a failed
+// mutation clears it by setting null. The clear happens during render — the
+// supported "adjust state when props change" form of this latch.
+export function usePendingValue<T>(serverValue: T): [T, (pending: T | null) => void] {
+  const [pending, setPending] = useState<T | null>(null);
+  if (pending !== null && serverValue === pending) {
+    setPending(null);
+  }
+  return [pending ?? serverValue, setPending];
+}
+
+// One-shot unary fetch shared by the version / uptime / deprecated-warnings
+// lookups: runs once `enabled` holds and the value is still missing, ignores
+// failures (daemons predating the method reject with Unimplemented), and
+// drops a result that lands after unmount.
+export function useUnaryOnce<T>(call: () => Promise<T>, enabled = true): T | null {
+  const [value, setValue] = useState<T | null>(null);
+  const callRef = useRef(call);
+  callRef.current = call;
+  useEffect(() => {
+    if (!enabled || value !== null) {
+      return;
+    }
+    let stale = false;
+    callRef.current().then(
+      (result) => {
+        if (!stale) {
+          setValue(result);
+        }
+      },
+      () => {},
+    );
+    return () => {
+      stale = true;
+    };
+  }, [enabled, value]);
+  return value;
 }
 
 // State machine shared by the streaming tools (network quality test, STUN

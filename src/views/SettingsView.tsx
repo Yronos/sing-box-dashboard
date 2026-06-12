@@ -3,7 +3,9 @@ import { useState } from "react";
 import {
   createServerId,
   normalizeServerUrl,
+  removeServer,
   serverDisplayName,
+  upsertServer,
   type Server,
   type ServersState,
 } from "../api/config";
@@ -72,24 +74,16 @@ export function ServersView(props: {
   onServersChange: (state: ServersState) => void;
 }) {
   const { t } = useI18n();
-  const { servers, activeId } = props.serversState;
+  const { servers } = props.serversState;
   const [editing, setEditing] = useState<Server | "new" | null>(null);
 
   const saveServer = (server: Server) => {
-    const exists = servers.some((entry) => entry.id === server.id);
-    const next = exists
-      ? servers.map((entry) => (entry.id === server.id ? server : entry))
-      : [...servers, server];
-    props.onServersChange({ servers: next, activeId: exists ? activeId : activeId ?? server.id });
+    props.onServersChange(upsertServer(props.serversState, server));
     setEditing(null);
   };
 
-  const removeServer = (id: string) => {
-    const next = servers.filter((entry) => entry.id !== id);
-    props.onServersChange({
-      servers: next,
-      activeId: activeId === id ? (next[0]?.id ?? null) : activeId,
-    });
+  const deleteServer = (id: string) => {
+    props.onServersChange(removeServer(props.serversState, id));
     setEditing(null);
   };
 
@@ -129,7 +123,7 @@ export function ServersView(props: {
           server={editing === "new" ? null : editing}
           canDelete={editing !== "new" && servers.length > 0}
           onSave={saveServer}
-          onDelete={removeServer}
+          onDelete={deleteServer}
           onClose={() => setEditing(null)}
         />
       )}
@@ -195,7 +189,7 @@ export function ServerDialog(props: {
             onChange={(event) => setSecret(event.target.value)}
           />
         </Field>
-        <div className="row-actions" style={{ marginTop: 14 }}>
+        <div className="row-actions dialog-actions">
           {props.server && props.canDelete && (
             <button
               className="button danger"

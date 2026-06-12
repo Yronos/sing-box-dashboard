@@ -9,6 +9,11 @@ export function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
 
+// Two-digit clock/date component, shared with the log file timestamp.
+export function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 
 function formatUnits(value: number, base: number): string {
@@ -68,17 +73,15 @@ export function formatUptime(startedAtMs: number, nowMs: number): string {
   totalSeconds -= hours * 3600;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds - minutes * 60;
-  const pad = (value: number) => String(value).padStart(2, "0");
   if (hours > 0) {
-    return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+    return `${hours}:${pad2(minutes)}:${pad2(seconds)}`;
   }
-  return `${minutes}:${pad(seconds)}`;
+  return `${minutes}:${pad2(seconds)}`;
 }
 
 export function formatClockTime(timestampMs: number): string {
   const date = new Date(timestampMs);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
 }
 
 export function formatDateTime(timestampMs: number, locale?: string): string {

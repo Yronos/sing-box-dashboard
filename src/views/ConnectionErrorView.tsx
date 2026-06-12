@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { serverDisplayName, type Server, type ServersState } from "../api/config";
+import { removeServer, serverDisplayName, upsertServer, type Server, type ServersState } from "../api/config";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
 import { Spinner } from "../components/ui";
@@ -20,23 +20,16 @@ export function ConnectionErrorView(props: {
 }) {
   const { t } = useI18n();
   const [editing, setEditing] = useState(false);
-  const { servers, activeId } = props.serversState;
+  const { servers } = props.serversState;
   const others = servers.filter((server) => server.id !== props.server.id);
 
   const saveServer = (server: Server) => {
-    props.onServersChange({
-      servers: servers.map((entry) => (entry.id === server.id ? server : entry)),
-      activeId,
-    });
+    props.onServersChange(upsertServer(props.serversState, server));
     setEditing(false);
   };
 
-  const removeServer = (id: string) => {
-    const next = servers.filter((entry) => entry.id !== id);
-    props.onServersChange({
-      servers: next,
-      activeId: activeId === id ? (next[0]?.id ?? null) : activeId,
-    });
+  const deleteServer = (id: string) => {
+    props.onServersChange(removeServer(props.serversState, id));
     setEditing(false);
   };
 
@@ -97,7 +90,7 @@ export function ConnectionErrorView(props: {
           server={props.server}
           canDelete={true}
           onSave={saveServer}
-          onDelete={removeServer}
+          onDelete={deleteServer}
           onClose={() => setEditing(false)}
         />
       )}

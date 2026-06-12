@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
+import { pad2 } from "../api/format";
 import { useStream } from "../api/stream";
 import { useApi } from "../app/context";
 import { showError } from "../app/errorStore";
@@ -41,8 +42,7 @@ function resolveBackground(): Rgb {
 // instead of colons since colons are invalid in filenames on most systems.
 function fileTimestamp(): string {
   const now = new Date();
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}.${pad(now.getMinutes())}.${pad(now.getSeconds())}`;
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}-${pad2(now.getHours())}.${pad2(now.getMinutes())}.${pad2(now.getSeconds())}`;
 }
 
 export function LogsView() {

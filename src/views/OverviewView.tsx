@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 
 import { formatBytes, formatMemoryBytes } from "../api/format";
 import { useStream } from "../api/stream";
 import { useApi } from "../app/context";
 import { showError } from "../app/errorStore";
+import { usePendingValue } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import {
   DASHBOARD_CARDS,
@@ -90,18 +91,11 @@ function OverviewCards(props: { config: DashboardCardsConfig }) {
   const { t } = useI18n();
   const status = useStream(api.status);
   const clashMode = useStream(api.clashMode);
-  const [pendingMode, setPendingMode] = useState<string | null>(null);
+  const [currentMode, setPendingMode] = usePendingValue(clashMode.data.currentMode);
 
   const current = status.data.current;
   const trafficAvailable = current?.trafficAvailable ?? false;
   const modeList = clashMode.data.modeList;
-  const currentMode = pendingMode ?? clashMode.data.currentMode;
-
-  useEffect(() => {
-    if (pendingMode !== null && clashMode.data.currentMode === pendingMode) {
-      setPendingMode(null);
-    }
-  }, [pendingMode, clashMode.data.currentMode]);
 
   const renderCard = (card: DashboardCardId) => {
     switch (card) {
@@ -177,32 +171,48 @@ function CardManagementDialog(props: {
 }) {
   const { t } = useI18n();
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Reordering uses pointer events rather than HTML5 drag-and-drop, which
+  // mobile browsers do not deliver from touch input: the handle captures the
+  // pointer, and whichever row the pointer is over becomes the new position.
+  const moveDrag = (event: React.PointerEvent<HTMLElement>) => {
+    if (dragIndex === null || !listRef.current) {
+      return;
+    }
+    const rows = Array.from(listRef.current.children) as HTMLElement[];
+    const target = rows.findIndex((row) => {
+      const rect = row.getBoundingClientRect();
+      return event.clientY >= rect.top && event.clientY < rect.bottom;
+    });
+    if (target >= 0 && target !== dragIndex) {
+      props.onChange(moveCard(props.config, dragIndex, target));
+      setDragIndex(target);
+    }
+  };
 
   return (
     <Dialog onClose={props.onClose}>
       <h3>{t("Dashboard Items")}</h3>
-      <div className="card-manage-list">
+      <div className="card-manage-list" ref={listRef}>
         {props.config.order.map((card, index) => {
           const enabled = props.config.enabled.includes(card);
           return (
             <div
               key={card}
               className={dragIndex === index ? "card-manage-row dragging" : "card-manage-row"}
-              draggable
-              onDragStart={(event) => {
-                setDragIndex(index);
-                event.dataTransfer.effectAllowed = "move";
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                if (dragIndex !== null && dragIndex !== index) {
-                  props.onChange(moveCard(props.config, dragIndex, index));
-                  setDragIndex(index);
-                }
-              }}
-              onDragEnd={() => setDragIndex(null)}
             >
-              <span className="drag-handle">
+              <span
+                className="drag-handle"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  setDragIndex(index);
+                }}
+                onPointerMove={moveDrag}
+                onPointerUp={() => setDragIndex(null)}
+                onPointerCancel={() => setDragIndex(null)}
+              >
                 <Icon name="drag_handle" size={14} />
               </span>
               <Icon name={DASHBOARD_CARDS[card].icon} size={15} />
@@ -217,7 +227,7 @@ function CardManagementDialog(props: {
           );
         })}
       </div>
-      <div className="row-actions" style={{ marginTop: 16 }}>
+      <div className="row-actions dialog-actions">
         <button
           className="button danger"
           style={{ marginInlineEnd: "auto" }}

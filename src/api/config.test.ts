@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadServersState, normalizeServerUrl, saveServersState, serverDisplayName } from "./config";
+import {
+  loadServersState,
+  normalizeServerUrl,
+  removeServer,
+  saveServersState,
+  serverDisplayName,
+  upsertServer,
+  type Server,
+  type ServersState,
+} from "./config";
 
 class MemoryStorage {
   private map = new Map<string, string>();
@@ -82,6 +91,41 @@ describe("normalizeServerUrl", () => {
     expect(normalizeServerUrl(" 10.0.0.1:9090/ ")).toBe("http://10.0.0.1:9090");
     expect(normalizeServerUrl("https://example.com//")).toBe("https://example.com");
     expect(normalizeServerUrl("")).toBe("");
+  });
+});
+
+describe("upsertServer / removeServer", () => {
+  const server = (id: string): Server => ({ id, name: "", url: `http://${id}.example`, secret: "" });
+
+  it("appends a new server and activates it when nothing is active", () => {
+    const state: ServersState = { servers: [], activeId: null };
+    const next = upsertServer(state, server("a"));
+    expect(next.servers.map((entry) => entry.id)).toEqual(["a"]);
+    expect(next.activeId).toBe("a");
+  });
+
+  it("appends without stealing the active server", () => {
+    const state: ServersState = { servers: [server("a")], activeId: "a" };
+    const next = upsertServer(state, server("b"));
+    expect(next.servers.map((entry) => entry.id)).toEqual(["a", "b"]);
+    expect(next.activeId).toBe("a");
+  });
+
+  it("replaces an existing server in place", () => {
+    const state: ServersState = { servers: [server("a"), server("b")], activeId: "b" };
+    const next = upsertServer(state, { ...server("a"), name: "Renamed" });
+    expect(next.servers.map((entry) => entry.name)).toEqual(["Renamed", ""]);
+    expect(next.activeId).toBe("b");
+  });
+
+  it("removes a server and falls back to the first remaining one", () => {
+    const state: ServersState = { servers: [server("a"), server("b")], activeId: "a" };
+    expect(removeServer(state, "a")).toEqual({ servers: [server("b")], activeId: "b" });
+    expect(removeServer(state, "b").activeId).toBe("a");
+    expect(removeServer({ servers: [server("a")], activeId: "a" }, "a")).toEqual({
+      servers: [],
+      activeId: null,
+    });
   });
 });
 
