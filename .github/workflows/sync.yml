@@ -10,10 +10,15 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -92,8 +97,39 @@ jobs:
           git push origin main
 
           echo "✅ Synced and pushed to origin/main" >> $GITHUB_STEP_SUMMARY
-          echo "🚀 The deploy.yml workflow will be triggered automatically" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Next steps:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Check the [Deploy workflow](https://github.com/${{ github.repository }}/actions/workflows/deploy.yml) status" >> $GITHUB_STEP_SUMMARY
-          echo "- Once deployed, visit your [GitHub Pages site](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }})" >> $GITHUB_STEP_SUMMARY
+
+      - name: Setup pnpm
+        if: steps.check-updates.outputs.has-updates == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        if: steps.check-updates.outputs.has-updates == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies and build
+        if: steps.check-updates.outputs.has-updates == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm generate
+          pnpm build
+          echo "✅ Build completed successfully" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload to GitHub Pages
+        if: steps.check-updates.outputs.has-updates == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        if: steps.check-updates.outputs.has-updates == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Deployment summary
+        if: steps.check-updates.outputs.has-updates == 'true'
+        run: |
+          echo "🚀 Successfully deployed to GitHub Pages" >> $GITHUB_STEP_SUMMARY
+          echo "Visit: https://${{ github.repository_owner }}.github.io/$(echo "${{ github.repository }}" | cut -d'/' -f2)" >> $GITHUB_STEP_SUMMARY
