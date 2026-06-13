@@ -1,0 +1,65 @@
+name: Auto Sync with Upstream
+
+on:
+  # 手动触发
+  workflow_dispatch:
+
+  # 每天凌晨 2 点自动检查
+  schedule:
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          submodules: true
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/SagerNet/sing-box-dashboard.git || true
+          git fetch upstream
+
+      - name: Check for updates
+        id: check-updates
+        run: |
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "Commits behind upstream: $BEHIND"
+
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "has-updates=true" >> $GITHUB_OUTPUT
+            echo "✅ Found $BEHIND new commit(s)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "has-updates=false" >> $GITHUB_OUTPUT
+            echo "✅ Already up to date" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Merge and push
+        if: steps.check-updates.outputs.has-updates == 'true'
+        run: |
+          # 同步子模块
+          git submodule update --init --recursive
+
+          # 合并上游
+          git merge upstream/main --no-edit || {
+            echo "❌ Merge conflict" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
+
+          # 推送（这会触发官方的 deploy.yml）
+          git push origin main
+
+          echo "✅ Synced and pushed" >> $GITHUB_STEP_SUMMARY
+          echo "🚀 Deploy workflow will be triggered automatically" >> $GITHUB_STEP_SUMMARY
