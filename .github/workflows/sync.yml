@@ -78,7 +78,3 @@ jobs:
 
           echo "✅ Synced and pushed to origin/main" >> $GITHUB_STEP_SUMMARY
           echo "🚀 The deploy.yml workflow will be triggered automatically" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Next steps:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Check the [Deploy workflow](https://github.com/${{ github.repository }}/actions/workflows/deploy.yml) status" >> $GITHUB_STEP_SUMMARY
-          echo "- Once deployed, visit your site at your custom domain" >> $GITHUB_STEP_SUMMARY
