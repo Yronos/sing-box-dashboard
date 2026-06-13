@@ -31,6 +31,7 @@ jobs:
         run: |
           git remote add upstream https://github.com/SagerNet/sing-box-dashboard.git || true
           git fetch upstream
+          git fetch upstream --tags
 
       - name: Check for updates
         id: check-updates
@@ -41,25 +42,58 @@ jobs:
           if [ "$BEHIND" -gt 0 ]; then
             echo "has-updates=true" >> $GITHUB_OUTPUT
             echo "✅ Found $BEHIND new commit(s)" >> $GITHUB_STEP_SUMMARY
+
+            # 显示即将合并的提交
+            echo "### New commits:" >> $GITHUB_STEP_SUMMARY
+            git log --oneline HEAD..upstream/main | head -10 >> $GITHUB_STEP_SUMMARY
           else
             echo "has-updates=false" >> $GITHUB_OUTPUT
             echo "✅ Already up to date" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Merge and push
+      - name: Sync submodules
         if: steps.check-updates.outputs.has-updates == 'true'
         run: |
-          # 同步子模块
-          git submodule update --init --recursive
+          # 更新子模块到上游最新
+          git submodule update --init --recursive --remote
+          echo "✅ Submodules updated" >> $GITHUB_STEP_SUMMARY
 
-          # 合并上游
-          git merge upstream/main --no-edit || {
-            echo "❌ Merge conflict" >> $GITHUB_STEP_SUMMARY
+      - name: Merge upstream changes
+        if: steps.check-updates.outputs.has-updates == 'true'
+        run: |
+          # 尝试合并上游，优先使用上游的更改（theirs 策略）
+          git merge upstream/main --no-edit -X theirs || {
+            echo "❌ Merge conflict detected" >> $GITHUB_STEP_SUMMARY
+            echo "### Conflicted files:" >> $GITHUB_STEP_SUMMARY
+            git diff --name-only --diff-filter=U >> $GITHUB_STEP_SUMMARY
             exit 1
           }
 
-          # 推送（这会触发官方的 deploy.yml）
+          echo "✅ Successfully merged upstream/main" >> $GITHUB_STEP_SUMMARY
+
+      - name: Configure for GitHub Pages
+        if: steps.check-updates.outputs.has-updates == 'true'
+        run: |
+          # 获取仓库名称
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+
+          # 修改 vite.config.ts 添加 base 路径（仅此一处修改）
+          sed -i 's/export default defineConfig({/export default defineConfig({\n  base: "\/'"$REPO_NAME"'\/",/' vite.config.ts
+
+          # 提交这个必要的配置改动
+          git add vite.config.ts
+          git commit -m "chore: configure base path for GitHub Pages deployment" || true
+
+          echo "✅ Configured base path for GitHub Pages" >> $GITHUB_STEP_SUMMARY
+
+      - name: Push to origin
+        if: steps.check-updates.outputs.has-updates == 'true'
+        run: |
           git push origin main
 
-          echo "✅ Synced and pushed" >> $GITHUB_STEP_SUMMARY
-          echo "🚀 Deploy workflow will be triggered automatically" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Synced and pushed to origin/main" >> $GITHUB_STEP_SUMMARY
+          echo "🚀 The deploy.yml workflow will be triggered automatically" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Check the [Deploy workflow](https://github.com/${{ github.repository }}/actions/workflows/deploy.yml) status" >> $GITHUB_STEP_SUMMARY
+          echo "- Once deployed, visit your [GitHub Pages site](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }})" >> $GITHUB_STEP_SUMMARY
