@@ -6,11 +6,10 @@ on:
 
   # 每天凌晨 2 点自动检查
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 20 * * *"
 
 permissions:
   contents: write
-  workflows: write
 
 jobs:
   sync:
