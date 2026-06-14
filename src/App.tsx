@@ -37,7 +37,14 @@ import { ConnectionsView } from "./views/ConnectionsView";
 import { GroupsView } from "./views/GroupsView";
 import { LogsView } from "./views/LogsView";
 import { OverviewView } from "./views/OverviewView";
-import { PreferencesView, ServersView, SettingsView } from "./views/SettingsView";
+import {
+  PreferencesView,
+  ServersView,
+  SettingsView,
+  TerminalConfigurationView,
+  TerminalThemeEditorView,
+  TerminalThemePickerView,
+} from "./views/SettingsView";
 import { SetupView } from "./views/SetupView";
 import { NetworkQualityView, STUNTestView, ToolsView } from "./views/ToolsView";
 import { TailscaleEndpointView } from "./views/TailscaleView";
@@ -55,11 +62,11 @@ export type Route =
   | { page: "tools/tailscale/ssh"; tag: string; peerID: string; username: string; terminalType: string }
   | { page: "settings" }
   | { page: "settings/preferences" }
+  | { page: "settings/preferences/terminal" }
+  | { page: "settings/preferences/terminal/theme"; scheme: "light" | "dark" }
+  | { page: "settings/preferences/terminal/custom"; scheme: "light" | "dark" }
   | { page: "settings/servers" };
 
-// decodeURIComponent throws on malformed escapes (e.g. "#/%"); this runs in
-// the route state initializer, so a bad hash must degrade to the literal
-// text instead of crashing the app at startup.
 function decodeSegment(segment: string): string {
   try {
     return decodeURIComponent(segment);
@@ -105,6 +112,15 @@ function routeFromHash(): Route {
     case "settings":
       switch (segments[1]) {
         case "preferences":
+          if (segments[2] === "terminal") {
+            if (segments[3] === "theme" && (segments[4] === "light" || segments[4] === "dark")) {
+              return { page: "settings/preferences/terminal/theme", scheme: segments[4] };
+            }
+            if (segments[3] === "custom" && (segments[4] === "light" || segments[4] === "dark")) {
+              return { page: "settings/preferences/terminal/custom", scheme: segments[4] };
+            }
+            return { page: "settings/preferences/terminal" };
+          }
           return { page: "settings/preferences" };
         case "servers":
           return { page: "settings/servers" };
@@ -138,6 +154,16 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
+  const activeServer =
+    serversState.servers.find((server) => server.id === serversState.activeId) ?? null;
+
+  useEffect(() => {
+    if (!activeServer && location.hash !== "") {
+      history.replaceState(null, "", location.pathname + location.search);
+      setRoute(routeFromHash());
+    }
+  }, [activeServer]);
+
   const updateServers = (next: ServersState) => {
     saveServersState(next);
     setServersState(next);
@@ -152,9 +178,6 @@ export function App() {
     saveAccentPreference(next);
     setAccent(next);
   };
-
-  const activeServer =
-    serversState.servers.find((server) => server.id === serversState.activeId) ?? null;
 
   return (
     <I18nProvider>
@@ -187,9 +210,6 @@ export function App() {
   );
 }
 
-// Presents failures reported through showError (fire-and-forget mutations
-// like close connection or clear logs) one at a time, like the
-// deprecated-warning chain below.
 function GlobalErrorDialog() {
   const { t } = useI18n();
   const message = useCurrentError();
@@ -204,7 +224,6 @@ function GlobalErrorDialog() {
         <button
           className="button"
           onClick={() => {
-            // Failing to copy the error must not enqueue another error.
             void navigator.clipboard.writeText(message).catch(() => {});
           }}
         >
@@ -228,11 +247,8 @@ function Shell(props: {
   accent: AccentPreference;
   onAccentChange: (accent: AccentPreference) => void;
 }) {
-  // Bumping the generation recreates the api, restarting every stream —
-  // the manual "Retry" path, also needed for terminal errors (e.g. a wrong
-  // secret) where the automatic reconnect loop has given up.
   const [generation, setGeneration] = useState(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- generation is an intentional extra dependency; bumping it is what forces the recreation
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const api = useMemo(() => new DaemonApi(props.server), [props.server, generation]);
   return (
     <ApiContext.Provider value={api}>
@@ -259,22 +275,11 @@ function ShellContent(props: {
   const groups = useStream(api.groups);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Latched while the daemon is unreachable, cleared only once the stream
-  // delivers again — the reconnect loop cycling back through "connecting"
-  // keeps the takeover screen up instead of bouncing to the dashboard
-  // between attempts. Errors a retry cannot fix and first-connect failures
-  // latch immediately; once data has flowed, a recoverable error first gets
-  // a grace period of silent reconnection (stale data stays up) so a stream
-  // killed by backgrounding the page never flashes the error screen.
   const lostError = useStreamOutage(
     serviceStatus,
     isTerminalCode(serviceStatus.errorCode) || serviceStatus.data.status === null,
   );
 
-  // A page restored from the background has had its streams killed by the
-  // browser and may sit mid-backoff; kick every stream the moment the page
-  // is visible again (or the network returns) so recovery lands within the
-  // grace period above instead of after it.
   useEffect(() => {
     const kick = () => {
       if (!document.hidden) {
@@ -291,12 +296,9 @@ function ShellContent(props: {
     };
   }, [api]);
 
-  // Fetch the version once the daemon is reachable; daemons predating
-  // GetVersion reject with Unimplemented, leaving the subtitle absent.
   const reachable = serviceStatus.phase === "active";
   const version = useUnaryOnce(() => api.getVersion(), reachable);
 
-  // Mobile drawer: close whenever navigation lands on a new page.
   useEffect(() => {
     setMenuOpen(false);
   }, [route]);
@@ -305,10 +307,6 @@ function ShellContent(props: {
   const hasGroups = started && groups.data.loaded && groups.data.groups.length > 0;
   const known = serviceStatus.phase !== "connecting" || serviceStatus.data.status !== null;
 
-  // Mirror the macOS sidebar: Groups and Connections exist only while the
-  // service runs; fall back to Overview when the current page disappears.
-  // While the groups stream has not delivered yet, visibility is unknown —
-  // don't redirect, or a refresh on the Groups page would bounce away.
   const groupsKnown = groups.data.loaded || groups.phase === "error";
   useEffect(() => {
     if (!known) {
@@ -336,9 +334,6 @@ function ShellContent(props: {
     );
   }
 
-  // First connect to this server: nothing to show yet, so a quiet splash
-  // stands in for the dashboard until the first status arrives (the error
-  // latch above takes over if it never does).
   if (serviceStatus.data.status === null) {
     return (
       <div className="connecting-view">
@@ -351,8 +346,6 @@ function ShellContent(props: {
     );
   }
 
-  // SSH sessions live in their own browser window (mirroring the separate
-  // terminal window on macOS), so the route renders without the shell chrome.
   if (route.page === "tools/tailscale/ssh") {
     return (
       <TailscaleSSHView
@@ -420,7 +413,7 @@ function ShellContent(props: {
         {route.page === "tools/network-quality" && <NetworkQualityView />}
         {route.page === "tools/stun" && <STUNTestView />}
         {route.page === "tools/tailscale" && <TailscaleEndpointView tag={route.tag} />}
-        {route.page === "settings" && <SettingsView serversState={props.serversState} />}
+        {route.page === "settings" && <SettingsView />}
         {route.page === "settings/preferences" && (
           <PreferencesView
             theme={props.theme}
@@ -429,14 +422,17 @@ function ShellContent(props: {
             onAccentChange={props.onAccentChange}
           />
         )}
+        {route.page === "settings/preferences/terminal" && <TerminalConfigurationView />}
+        {route.page === "settings/preferences/terminal/theme" && (
+          <TerminalThemePickerView scheme={route.scheme} />
+        )}
+        {route.page === "settings/preferences/terminal/custom" && (
+          <TerminalThemeEditorView scheme={route.scheme} />
+        )}
         {route.page === "settings/servers" && (
           <ServersView serversState={props.serversState} onServersChange={props.onServersChange} />
         )}
       </main>
-      {/* Reaching this point with a non-active stream means the reconnect
-          grace period is running: stale data stays up, with this floating
-          hint as the only cue. Its delayed fade-in keeps an instant
-          recovery (e.g. returning from the background) invisible. */}
       {serviceStatus.phase !== "active" && (
         <div className="reconnect-pill" role="status">
           <Spinner />
@@ -513,9 +509,6 @@ function ServerPicker(props: {
   );
 }
 
-// Own component so the 1 s clock tick re-renders only this element, not the
-// sidebar. Mounted only while the service runs, so a restart remounts it and
-// refetches the start time.
 function ServerUptime() {
   const api = useApi();
   const { t, language } = useI18n();
@@ -533,10 +526,6 @@ function ServerUptime() {
   );
 }
 
-// Mirrors GlobalChecksModifier in sing-box-for-apple: when the service
-// reaches the started state, fetch deprecated notes once and present them
-// as a chain of alerts. Mounted only while the service runs, so a restart
-// remounts it and fetches the warnings again.
 function DeprecatedWarningsGate() {
   const api = useApi();
   const warnings = useUnaryOnce(() => api.getDeprecatedWarnings());

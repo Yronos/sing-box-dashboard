@@ -1,12 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { Select } from "../components/ui";
 import { LANGUAGES, TRANSLATIONS, type Language, type MessageKey, type PluralForms } from "./translations";
 
 export type { Language, MessageKey };
 
 export type LanguagePreference = "auto" | Language;
 
-// Mirrored by the pre-paint script in index.html (language detection + dir).
 const LANGUAGE_KEY = "sing-box-dashboard.language";
 
 export function loadLanguagePreference(): LanguagePreference {
@@ -29,7 +29,6 @@ export function detectSystemLanguage(): Language {
   for (const tag of navigator.languages ?? [navigator.language]) {
     const lower = tag.toLowerCase();
     if (lower.startsWith("zh")) {
-      // Script subtag wins; otherwise infer it from the region as CLDR does.
       if (/hant|tw|hk|mo/.test(lower)) {
         return "zh-Hant";
       }
@@ -73,7 +72,6 @@ function translate(language: Language, key: MessageKey, params?: TranslateParams
   if (typeof entry === "string") {
     text = entry;
   } else {
-    // Plural-aware translations pick their form from the {count} parameter.
     const count = typeof params?.count === "number" ? params.count : null;
     text = (count !== null ? entry[pluralRules(language).select(count)] : undefined) ?? entry.other;
   }
@@ -136,23 +134,11 @@ export function I18nProvider(props: { children: ReactNode }) {
   return <I18nContext.Provider value={value}>{props.children}</I18nContext.Provider>;
 }
 
-// Shared between Settings preferences and the first-run setup screen; the
-// "auto" entry is labelled in the active language, the languages themselves
-// in their own.
-export function LanguageSelect(props: { className?: string }) {
+export function LanguageSelect() {
   const { t, preference, setPreference } = useI18n();
-  return (
-    <select
-      className={props.className ?? "select"}
-      value={preference}
-      onChange={(event) => setPreference(event.target.value as LanguagePreference)}
-    >
-      <option value="auto">{t("System")}</option>
-      {LANGUAGES.map((language) => (
-        <option key={language.value} value={language.value}>
-          {language.label}
-        </option>
-      ))}
-    </select>
-  );
+  const options: { value: LanguagePreference; label: string }[] = [
+    { value: "auto", label: t("System") },
+    ...LANGUAGES.map((language) => ({ value: language.value, label: language.label })),
+  ];
+  return <Select inline options={options} value={preference} onChange={setPreference} />;
 }

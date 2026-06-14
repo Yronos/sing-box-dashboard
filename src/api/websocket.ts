@@ -1,12 +1,10 @@
 import type { DescMessage, MessageInitShape, MessageShape } from "@bufbuild/protobuf";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 
-import type { Server } from "./config";
+import { serverConnectUrl, type Server } from "./config";
 
-// Bidirectional gRPC streaming over WebSocket, speaking the
-// improbable-eng/grpc-web "grpc-websockets" subprotocol the sing-box API
-// service accepts. Browsers cannot carry bidirectional streams over fetch,
-// so methods like the Tailscale SSH session use this transport instead.
+// Bidirectional gRPC streaming over the improbable-eng/grpc-web
+// "grpc-websockets" subprotocol the sing-box API service accepts.
 
 export interface GrpcStatus {
   code: number;
@@ -28,14 +26,14 @@ const FINISH_SEND = new Uint8Array([1]);
 export class GrpcWebSocketStream<Req extends DescMessage, Res extends DescMessage> {
   private socket: WebSocket;
   private buffer = new Uint8Array(0);
-  private pendingSends: Uint8Array[] = [];
+  private pendingSends: Uint8Array<ArrayBuffer>[] = [];
   private opened = false;
   private ended = false;
   private headersSeen = false;
   private status: GrpcStatus | null = null;
 
   constructor(private options: WebSocketStreamOptions<Req, Res>) {
-    const baseUrl = options.config.url.replace(/\/+$/, "").replace(/^http/, "ws");
+    const baseUrl = serverConnectUrl(options.config.url).replace(/^http/, "ws");
     this.socket = new WebSocket(`${baseUrl}/${options.service}/${options.method}`, [
       "grpc-websockets",
     ]);
@@ -89,7 +87,7 @@ export class GrpcWebSocketStream<Req extends DescMessage, Res extends DescMessag
     this.socket.close();
   }
 
-  private enqueue(frame: Uint8Array) {
+  private enqueue(frame: Uint8Array<ArrayBuffer>) {
     if (this.opened) {
       if (this.socket.readyState === WebSocket.OPEN) {
         this.socket.send(frame);
@@ -158,8 +156,7 @@ export class GrpcWebSocketStream<Req extends DescMessage, Res extends DescMessag
     try {
       message = decodeURIComponent(message);
     } catch {
-      // A malformed percent-encoding keeps the raw value; throwing here would
-      // leave the stream hanging without an end notification.
+      // ignore
     }
     this.status = { code, message };
     this.end(this.status);

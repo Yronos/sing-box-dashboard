@@ -1,15 +1,12 @@
 import { useState } from "react";
 
 import { removeServer, serverDisplayName, upsertServer, type Server, type ServersState } from "../api/config";
+import { useDiagnosedConnectError } from "../app/connectError";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
 import { Spinner } from "../components/ui";
 import { ServerDialog } from "./SettingsView";
-import { useDiagnosedConnectError } from "./SetupView";
 
-// Full-screen takeover shown when the daemon cannot be reached: lets the
-// user retry immediately, fix the server entry, or jump to another server
-// without digging through Settings.
 export function ConnectionErrorView(props: {
   server: Server;
   error: string;

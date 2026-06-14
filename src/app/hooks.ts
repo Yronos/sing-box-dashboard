@@ -1,30 +1,16 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 import type { StreamSnapshot } from "../api/stream";
+import { loadTerminalConfig, TERMINAL_CONFIG_EVENT, type TerminalConfig } from "../lib/tailscaleSSH";
 
-// How long a stream that already delivered data may stay failing before its
-// outage is surfaced (the connection-lost takeover, the per-view error
-// banners). The reconnect loop retries at roughly t=1/3/6 s (1/2/3 s backoff
-// steps), so anything shorter than ~6 s would expire inside the gap before
-// the third attempt and flash an error for an outage that attempt was about
-// to fix.
 export const RECONNECT_GRACE_MS = 6500;
 
-// Latched error message for a failing stream: null while the stream is
-// healthy or the outage is still within the grace period, the error text
-// once latched — immediately when `immediate` holds (errors a retry cannot
-// fix, first-connect failures). Cleared only when the stream delivers
-// again, and the timer spans the error → connecting → error cycles of the
-// reconnect loop, so the result neither bounces nor re-arms between
-// attempts.
 export function useStreamOutage(
   snapshot: StreamSnapshot<unknown>,
   immediate: boolean,
   graceMs = RECONNECT_GRACE_MS,
 ): string | null {
   const [outage, setOutage] = useState<string | null>(null);
-  // The message is latched through a ref because the "connecting" snapshot
-  // between attempts carries no error fields.
   const lastError = useRef("");
   const timer = useRef<number | null>(null);
   useEffect(() => {
@@ -61,15 +47,54 @@ export function useStreamOutage(
   return outage;
 }
 
-// Menus register here while open; Escape dismisses only the topmost one.
-// Dialogs and drawers are native <dialog> elements that close through their
-// cancel event instead — the preventDefault below also stops that default
-// action, so a menu open inside a dialog closes before the dialog does.
+// Tracks the on-screen keyboard height via the visual viewport so the terminal
+// symbol bar can sit just above the soft keyboard. Returns 0 when no keyboard
+// is shown, or on platforms without a visualViewport (desktop/old browsers).
+//
+// Height is layout viewport - visual viewport, deliberately WITHOUT offsetTop,
+// and recomputed only on `resize` (keyboard show/hide) — never on `scroll`.
+// The keyboard is anchored to the bottom of the layout viewport, so its height
+// is constant while the page rubber-band scrolls; folding in offsetTop or
+// reacting to scroll would make a `position: fixed` bar drift away from the
+// keyboard and flicker out on scroll-up.
+export function useKeyboardInset(): number {
+  const [inset, setInset] = useState(0);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) {
+      return;
+    }
+    const update = () => {
+      const height = window.innerHeight - viewport.height;
+      setInset(height > 1 ? Math.round(height) : 0);
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    return () => viewport.removeEventListener("resize", update);
+  }, []);
+  return inset;
+}
+
+// Reads the terminal config from storage and re-renders when it changes, both
+// within this window (custom event) and in the desktop terminal popup (the
+// native cross-window `storage` event).
+export function useTerminalConfig(): TerminalConfig {
+  const [config, setConfig] = useState<TerminalConfig>(loadTerminalConfig);
+  useEffect(() => {
+    const update = () => setConfig(loadTerminalConfig());
+    window.addEventListener("storage", update);
+    window.addEventListener(TERMINAL_CONFIG_EVENT, update);
+    return () => {
+      window.removeEventListener("storage", update);
+      window.removeEventListener(TERMINAL_CONFIG_EVENT, update);
+    };
+  }, []);
+  return config;
+}
+
 const escapeStack: (() => void)[] = [];
 
 function useEscapeEntry(active: boolean, onDismiss: () => void) {
-  // Read through a ref so a new callback identity per render neither
-  // re-registers the listener nor needs to be a dependency.
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
   useEffect(() => {
@@ -95,8 +120,6 @@ function useEscapeEntry(active: boolean, onDismiss: () => void) {
   }, [active]);
 }
 
-// Dismissal behavior shared by the popup menus (server picker, theme menu,
-// overflow menus): pointerdown outside the anchor or Escape closes them.
 export function useDismiss(
   ref: RefObject<HTMLElement | null>,
   open: boolean,
@@ -119,11 +142,6 @@ export function useDismiss(
   }, [ref, open]);
 }
 
-// Optimistic pending value for fire-and-forget selections (Clash mode, group
-// outbound, group expand): the UI shows the value the user picked right away
-// and drops it once the stream confirms the server reached it; a failed
-// mutation clears it by setting null. The clear happens during render — the
-// supported "adjust state when props change" form of this latch.
 export function usePendingValue<T>(serverValue: T): [T, (pending: T | null) => void] {
   const [pending, setPending] = useState<T | null>(null);
   if (pending !== null && serverValue === pending) {
@@ -132,10 +150,7 @@ export function usePendingValue<T>(serverValue: T): [T, (pending: T | null) => v
   return [pending ?? serverValue, setPending];
 }
 
-// One-shot unary fetch shared by the version / uptime / deprecated-warnings
-// lookups: runs once `enabled` holds and the value is still missing, ignores
-// failures (daemons predating the method reject with Unimplemented), and
-// drops a result that lands after unmount.
+// Failures are ignored: daemons predating the method reject with Unimplemented.
 export function useUnaryOnce<T>(call: () => Promise<T>, enabled = true): T | null {
   const [value, setValue] = useState<T | null>(null);
   const callRef = useRef(call);
@@ -160,9 +175,6 @@ export function useUnaryOnce<T>(call: () => Promise<T>, enabled = true): T | nul
   return value;
 }
 
-// State machine shared by the streaming tools (network quality test, STUN
-// test, Tailscale ping): a running flag plus a stream error, with the stream
-// aborted on unmount and the rejection a user-initiated stop causes ignored.
 export function useStreamingAction(): {
   running: boolean;
   error: string;

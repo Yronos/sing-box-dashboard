@@ -16,8 +16,6 @@ const STORAGE_KEY = "sing-box-dashboard.servers";
 const LEGACY_STORAGE_KEY = "sing-box-dashboard.server";
 
 export function createServerId(): string {
-  // crypto.randomUUID only exists in secure contexts; the dashboard is
-  // commonly served over plain HTTP from a LAN address.
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
@@ -25,11 +23,15 @@ export function createServerId(): string {
 }
 
 export function normalizeServerUrl(url: string): string {
-  let value = url.trim().replace(/\/+$/, "");
-  if (value !== "" && !/^https?:\/\//.test(value)) {
-    value = `http://${value}`;
+  return url.trim().replace(/\/+$/, "").replace(/^http:\/\//i, "");
+}
+
+export function serverConnectUrl(url: string): string {
+  const value = url.trim().replace(/\/+$/, "");
+  if (value === "") {
+    return "";
   }
-  return value;
+  return /^https?:\/\//i.test(value) ? value : `http://${value}`;
 }
 
 export function serverDisplayName(server: Server): string {
@@ -37,7 +39,7 @@ export function serverDisplayName(server: Server): string {
     return server.name;
   }
   try {
-    return new URL(server.url).host;
+    return new URL(serverConnectUrl(server.url)).host;
   } catch {
     return server.url;
   }
@@ -52,7 +54,7 @@ function migrateLegacy(): ServersState | null {
   const server: Server = {
     id: createServerId(),
     name: "",
-    url: parsed.url,
+    url: normalizeServerUrl(parsed.url),
     secret: typeof parsed.secret === "string" ? parsed.secret : "",
   };
   return { servers: [server], activeId: server.id };
@@ -73,6 +75,7 @@ export function loadServersState(): ServersState {
       ...server,
       name: typeof server.name === "string" ? server.name : "",
       secret: typeof server.secret === "string" ? server.secret : "",
+      url: normalizeServerUrl(server.url),
     }));
     const activeId =
       typeof parsed.activeId === "string" && normalized.some((server) => server.id === parsed.activeId)
@@ -91,9 +94,6 @@ export function loadServersState(): ServersState {
 export function saveServersState(state: ServersState) {
   saveStoredJson(STORAGE_KEY, state);
 }
-
-// Server list mutations shared by the Settings sub-page and the
-// connection-error takeover, so the activeId fallback rules stay identical.
 
 export function upsertServer(state: ServersState, server: Server): ServersState {
   const exists = state.servers.some((entry) => entry.id === server.id);

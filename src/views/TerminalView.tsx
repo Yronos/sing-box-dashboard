@@ -1,15 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import { useStream } from "../api/stream";
 import { GrpcWebSocketStream } from "../api/websocket";
-import { useApi } from "../app/context";
+import { useApi, useIsMobile } from "../app/context";
+import { useKeyboardInset, useTerminalConfig } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
+import { SYMBOL_BAR_HEIGHT, TerminalSymbolBar } from "../components/TerminalSymbolBar";
 import { EmptyState, MenuItem, OthersMenu, SubMenu } from "../components/ui";
+import {
+  armModifier,
+  consumeArmed,
+  encodeSpecial,
+  encodeText,
+  hasActiveModifier,
+  type ModKey,
+  type Modifiers,
+  type TerminalKey,
+} from "../lib/terminalKeys";
 import {
   TailscaleSSHClientMessageSchema,
   TailscaleSSHServerMessageSchema,
@@ -25,10 +37,15 @@ import {
   SSH_DEFAULT_USERNAME,
   type SSHSessionOptions,
 } from "../lib/tailscaleSSH";
+import {
+  currentScheme,
+  resolveTheme,
+  resolveThemeSync,
+  terminalFontFamily,
+  terminalFontSize,
+  type Scheme,
+} from "../lib/terminalTheme";
 
-// SSH session window as a routed page: on desktop it lives in a dedicated
-// popup browser window (mirroring the separate terminal window on macOS),
-// resolved from the URL alone so it survives a reload on its own.
 export function TailscaleSSHView(props: {
   tag: string;
   peerID: string;
@@ -43,9 +60,6 @@ export function TailscaleSSHView(props: {
   const endpoint = tailscale.data.endpoints.find((entry) => entry.endpointTag === props.tag);
   const peer = allPeers(endpoint).find((entry) => entry.stableID === props.peerID);
 
-  // Latch the session options from the first status delivery: later stream
-  // updates (peers flapping online/offline) must not tear down the live
-  // terminal.
   useEffect(() => {
     if (initialSession || !peer) {
       return;
@@ -75,8 +89,6 @@ export function TailscaleSSHView(props: {
   );
 }
 
-// Mobile counterpart of the popup window: a full-screen overlay above the
-// dashboard, like the full-screen terminal sheet on iOS.
 export function TerminalOverlay(props: {
   tag: string;
   initialSession: SSHSessionOptions;
@@ -98,9 +110,6 @@ export function TerminalOverlay(props: {
 interface ManagedSession {
   id: number;
   options: SSHSessionOptions;
-  // Remote title reported via OSC escape sequences; empty until the shell
-  // sets one, then it replaces user@host, like the Ghostty title on Apple
-  // platforms.
   title: string;
   statusLine: string | null;
 }
@@ -110,12 +119,6 @@ function sessionDisplayTitle(session: ManagedSession): string {
   return remote !== "" ? remote : `${session.options.username}@${session.options.peerName}`;
 }
 
-// Multi-session terminal with the session manager menu, mirroring
-// TerminalSessionManager/TerminalSessionMenuButton in sing-box-for-apple:
-// New Session duplicates the active one or opens any other remembered peer;
-// the list below switches between live sessions. Sessions that exit cleanly
-// close themselves after a second; when the last one goes, the window or
-// overlay closes.
 function TerminalContainer(props: {
   tag: string;
   initialSession: SSHSessionOptions;
@@ -140,9 +143,6 @@ function TerminalContainer(props: {
     }
   }, [props.setWindowTitle, activeTitle]);
 
-  // All sessions gone: close the popup window, or the overlay on mobile.
-  // The empty state below stays as a fallback for when the browser refuses
-  // to close a window it did not open.
   const onCloseRef = useRef(props.onClose);
   onCloseRef.current = props.onClose;
   useEffect(() => {
@@ -188,8 +188,6 @@ function TerminalContainer(props: {
     }
   };
 
-  // Other remembered peers reachable from this endpoint, excluding the peer
-  // of the active session — the candidates for New Session.
   const prefs = loadSSHPrefs();
   const endpoint = tailscale.data.endpoints.find((entry) => entry.endpointTag === props.tag);
   const rememberedPeers = allPeers(endpoint).filter(
@@ -296,9 +294,20 @@ function TerminalSession(props: {
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
 
-  // Read t and the callbacks through refs inside the stream callbacks: a
-  // language switch or parent re-render must not re-run the effect, which
-  // would tear down a live SSH session.
+  const isMobile = useIsMobile();
+  const keyboardInset = useKeyboardInset();
+  const config = useTerminalConfig();
+  const { symbolBarAlwaysShow } = config;
+  const configRef = useRef(config);
+  configRef.current = config;
+  const [scheme, setScheme] = useState<Scheme>(() => currentScheme());
+  const [activeTheme, setActiveTheme] = useState<ITheme>(() => resolveThemeSync(config, scheme));
+  const [modifiers, setModifiers] = useState<Modifiers>({ ctrl: "off", alt: "off" });
+  const modifiersRef = useRef(modifiers);
+  modifiersRef.current = modifiers;
+  const armedAtRef = useRef<Record<ModKey, number>>({ ctrl: 0, alt: 0 });
+  const sendRawRef = useRef<((text: string) => void) | null>(null);
+
   const tRef = useRef(t);
   tRef.current = t;
   const onStatusLineRef = useRef(props.onStatusLine);
@@ -314,16 +323,12 @@ function TerminalSession(props: {
       return;
     }
     const setStatusLine = (line: string | null) => onStatusLineRef.current(line);
+    const initialConfig = configRef.current;
     const terminal = new Terminal({
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-      fontSize: 13,
+      fontFamily: terminalFontFamily(initialConfig),
+      fontSize: terminalFontSize(initialConfig),
       cursorBlink: true,
-      theme: {
-        background: "#181818",
-        foreground: "#ededed",
-        cursor: "#ededed",
-        selectionBackground: "rgba(255, 255, 255, 0.25)",
-      },
+      theme: resolveThemeSync(initialConfig, currentScheme()),
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -406,13 +411,23 @@ function TerminalSession(props: {
     setStatusLine(lastStatus);
 
     const encoder = new TextEncoder();
-    const dataSubscription = terminal.onData((data) => {
+    const sendRaw = (text: string) => {
       stream.send({
         message: {
           case: "input",
-          value: { data: encoder.encode(data) },
+          value: { data: encoder.encode(text) },
         },
       });
+    };
+    sendRawRef.current = sendRaw;
+    const dataSubscription = terminal.onData((data) => {
+      const mods = modifiersRef.current;
+      if (hasActiveModifier(mods)) {
+        sendRaw(encodeText(data, mods));
+        setModifiers((current) => consumeArmed(current));
+      } else {
+        sendRaw(data);
+      }
     });
     const resizeSubscription = terminal.onResize((size) => {
       stream.send({
@@ -425,8 +440,6 @@ function TerminalSession(props: {
     const titleSubscription = terminal.onTitleChange((title) => {
       onTitleChangeRef.current(title);
     });
-    // Skip fitting while hidden behind another session: xterm cannot measure
-    // a display:none host.
     const resizeObserver = new ResizeObserver(() => {
       if (host.clientWidth > 0 && host.clientHeight > 0) {
         fit.fit();
@@ -443,10 +456,10 @@ function TerminalSession(props: {
       terminal.dispose();
       terminalRef.current = null;
       fitRef.current = null;
+      sendRawRef.current = null;
     };
   }, [api, props.session]);
 
-  // Refit and refocus when this session becomes the visible one.
   useEffect(() => {
     if (!props.active) {
       return;
@@ -458,11 +471,116 @@ function TerminalSession(props: {
     terminalRef.current?.focus();
   }, [props.active]);
 
+  // Track the app's effective light/dark appearance (written to
+  // <html data-theme>) so the terminal can pick the matching theme slot.
+  useEffect(() => {
+    const observer = new MutationObserver(() => setScheme(currentScheme()));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    setScheme(currentScheme());
+    return () => observer.disconnect();
+  }, []);
+
+  // Apply font and theme changes to the live terminal without recreating it
+  // (which would tear down the SSH session).
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
+      return;
+    }
+    terminal.options.fontFamily = terminalFontFamily(config);
+    terminal.options.fontSize = terminalFontSize(config);
+    let cancelled = false;
+    void resolveTheme(config, scheme).then((theme) => {
+      if (cancelled) {
+        return;
+      }
+      const term = terminalRef.current;
+      if (!term) {
+        return;
+      }
+      term.options.theme = theme;
+      setActiveTheme(theme);
+      fitRef.current?.fit();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [config, scheme]);
+
+  const handleModifier = (mod: ModKey) => {
+    const now = Date.now();
+    const doubleTap = now - armedAtRef.current[mod] < 300;
+    armedAtRef.current[mod] = now;
+    setModifiers((current) => armModifier(current, mod, doubleTap));
+    terminalRef.current?.focus();
+  };
+
+  const handleKey = (key: TerminalKey) => {
+    const mods = modifiersRef.current;
+    let seq: string | null = null;
+    if (key.kind === "special") {
+      seq = encodeSpecial(key.id, mods);
+    } else if (key.kind === "text") {
+      seq = encodeText(key.char, mods);
+    }
+    if (seq !== null) {
+      sendRawRef.current?.(seq);
+    }
+    setModifiers((current) => consumeArmed(current));
+    terminalRef.current?.focus();
+  };
+
+  const handlePaste = () => {
+    const clipboard = navigator.clipboard;
+    if (clipboard?.readText) {
+      void clipboard.readText().then(
+        (text) => {
+          if (text) {
+            sendRawRef.current?.(text);
+          }
+        },
+        () => {},
+      );
+    }
+    setModifiers((current) => consumeArmed(current));
+    terminalRef.current?.focus();
+  };
+
+  // On mobile the bar is purely keyboard-gated: it appears above the keyboard
+  // and hides when there is no keyboard (never resting at the bottom). The
+  // "always show" toggle only adds the desktop case, where there is no keyboard.
+  const keyboardVisible = isMobile && keyboardInset > 100;
+  const barVisible = props.active && (keyboardVisible || (symbolBarAlwaysShow && !isMobile));
+  const hostStyle: CSSProperties = {};
+  if (activeTheme.background) {
+    hostStyle.background = activeTheme.background;
+  }
+  if (!props.active) {
+    hostStyle.display = "none";
+  }
+  if (barVisible) {
+    hostStyle.paddingBottom = `calc(${keyboardInset + SYMBOL_BAR_HEIGHT + 8}px + env(safe-area-inset-bottom, 0px))`;
+  }
+
   return (
-    <div
-      className="terminal-host"
-      style={props.active ? undefined : { display: "none" }}
-      ref={hostRef}
-    />
+    <>
+      <div
+        className="terminal-host"
+        style={Object.keys(hostStyle).length > 0 ? hostStyle : undefined}
+        ref={hostRef}
+      />
+      {barVisible && (
+        <TerminalSymbolBar
+          modifiers={modifiers}
+          onModifier={handleModifier}
+          onKey={handleKey}
+          onPaste={handlePaste}
+          style={{ bottom: keyboardInset }}
+        />
+      )}
+    </>
   );
 }
