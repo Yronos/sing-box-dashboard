@@ -157,7 +157,11 @@ export function TailscaleEndpointView(props: { tag: string }) {
   return (
     <div className="page">
       <ToolsPageHeader
-        title={props.tag === "" ? "Tailscale" : t("Tailscale: {tag}", { tag: props.tag })}
+        title={
+          tailscale.data.endpoints.length > 1 && props.tag !== ""
+            ? t("Tailscale: {tag}", { tag: props.tag })
+            : "Tailscale"
+        }
       />
       <StreamStates
         snapshot={tailscale}
