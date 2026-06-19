@@ -1,5 +1,6 @@
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
+import type { LogEntry } from "../api/daemon";
 import { pad2 } from "../api/format";
 import { isTerminalCode, useStream } from "../api/stream";
 import { useApi } from "../app/context";
@@ -8,9 +9,10 @@ import { useStreamOutage } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
 import { StreamErrorBanner } from "../components/StreamBanner";
-import { EmptyState, MenuItem, OthersMenu, SearchInput, Spinner, SubMenu } from "../components/ui";
+import { EmptyState, IconButton, MenuItem, OthersMenu, SearchInput, Spinner, SubMenu } from "../components/ui";
 import { LogLevel, ServiceStatus_Type } from "../gen/daemon/started_service_pb";
 import { ansiColorCss, parseAnsi, parseCssColor, stripAnsi, type Rgb } from "../lib/ansi";
+import styles from "./LogsView.module.css";
 
 const MAX_VISIBLE_LOGS = 1000;
 
@@ -50,6 +52,7 @@ export function LogsView() {
   const serviceStatus = useStream(api.serviceStatus);
   const [level, setLevel] = useState<LogLevel | null>(null);
   const [paused, setPaused] = useState(false);
+  const [frozen, setFrozen] = useState<LogEntry[]>([]);
   const [search, setSearch] = useState("");
   const viewRef = useRef<HTMLDivElement>(null);
   const background = useLogBackground();
@@ -57,14 +60,25 @@ export function LogsView() {
   const started = serviceStatus.data.status?.status === ServiceStatus_Type.STARTED;
   const effectiveLevel = level ?? logs.data.defaultLevel ?? LogLevel.INFO;
 
+  const togglePause = () => {
+    if (paused) {
+      setPaused(false);
+    } else {
+      setFrozen(logs.data.entries);
+      setPaused(true);
+    }
+  };
+
+  const sourceEntries = paused ? frozen : logs.data.entries;
+
   const filtered = useMemo(() => {
-    let entries = logs.data.entries.filter((entry) => entry.level <= effectiveLevel);
+    let entries = sourceEntries.filter((entry) => entry.level <= effectiveLevel);
     const query = search.trim().toLowerCase();
     if (query !== "") {
       entries = entries.filter((entry) => stripAnsi(entry.message).toLowerCase().includes(query));
     }
     return entries;
-  }, [logs.data.entries, effectiveLevel, search]);
+  }, [sourceEntries, effectiveLevel, search]);
 
   const visible = useMemo(
     () =>
@@ -108,7 +122,7 @@ export function LogsView() {
     }
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (paused) {
       return;
     }
@@ -119,9 +133,9 @@ export function LogsView() {
   }, [visible, paused]);
 
   let body: ReactNode;
-  if (logs.data.entries.length > 0 && outage === null) {
+  if (sourceEntries.length > 0 && outage === null) {
     body = (
-      <div className="log-view" ref={viewRef}>
+      <div className={styles.logView} ref={viewRef}>
         {visible.map((entry) => (
           <LogLine
             key={entry.id}
@@ -151,13 +165,13 @@ export function LogsView() {
       <div className="page-header">
         <h1 className="page-title">{t("Logs")}</h1>
         <div className="actions">
-          <button
-            className={paused ? "icon-button active" : "icon-button"}
+          <IconButton
+            active={paused}
             title={paused ? t("Resume scrolling") : t("Pause scrolling")}
-            onClick={() => setPaused(!paused)}
+            onClick={togglePause}
           >
             <Icon name={paused ? "play_arrow" : "pause"} />
-          </button>
+          </IconButton>
           <OthersMenu>
             <SubMenu label={t("Log Level")} icon="filter_list">
               <MenuItem checked={level === null} onSelect={() => setLevel(null)}>
@@ -202,7 +216,7 @@ export function LogsView() {
       <div className="field">
         <SearchInput value={search} onChange={setSearch} />
       </div>
-      <StreamErrorBanner error={outage} subject="logs" />
+      <StreamErrorBanner error={outage} />
       {body}
     </div>
   );
@@ -285,5 +299,5 @@ const LogLine = memo(function LogLine(props: {
     }
   }
 
-  return <span className="log-line">{parts}</span>;
+  return <span className={styles.logLine}>{parts}</span>;
 });

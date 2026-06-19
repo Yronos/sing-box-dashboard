@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type ITheme } from "@xterm/xterm";
@@ -11,7 +11,7 @@ import { useKeyboardInset, useTerminalConfig } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
 import { SYMBOL_BAR_HEIGHT, TerminalSymbolBar } from "../components/TerminalSymbolBar";
-import { EmptyState, MenuItem, OthersMenu, SubMenu } from "../components/ui";
+import { EmptyState, IconButton, MenuItem, OthersMenu, Spinner, SubMenu } from "../components/ui";
 import {
   armModifier,
   consumeArmed,
@@ -45,6 +45,8 @@ import {
   terminalFontSize,
   type Scheme,
 } from "../lib/terminalTheme";
+import styles from "./TerminalView.module.css";
+import { cx } from "../lib/cx";
 
 export function TailscaleSSHView(props: {
   tag: string;
@@ -95,7 +97,7 @@ export function TerminalOverlay(props: {
   onClose: () => void;
 }) {
   return (
-    <div className="terminal-overlay">
+    <div className={styles.terminalOverlay}>
       <div className="page page-full terminal-page">
         <TerminalContainer
           tag={props.tag}
@@ -223,9 +225,9 @@ function TerminalContainer(props: {
     <>
       <div className="page-header">
         {props.onClose && (
-          <button className="icon-button" title={t("Close")} onClick={props.onClose}>
+          <IconButton title={t("Close")} onClick={props.onClose}>
             <Icon name="close" size={18} />
-          </button>
+          </IconButton>
         )}
         <h1 className="page-title">{activeTitle}</h1>
         <div className="actions">
@@ -281,6 +283,20 @@ function TerminalContainer(props: {
   );
 }
 
+const BANNER_URL_REGEX = /(https?:\/\/[^\s]+)/g;
+
+function linkifyBanner(text: string): ReactNode[] {
+  return text.split(BANNER_URL_REGEX).map((part, i) =>
+    i % 2 === 1 ? (
+      <a key={i} href={part} target="_blank" rel="noreferrer">
+        {part}
+      </a>
+    ) : (
+      part
+    ),
+  );
+}
+
 function TerminalSession(props: {
   session: SSHSessionOptions;
   active: boolean;
@@ -302,6 +318,8 @@ function TerminalSession(props: {
   configRef.current = config;
   const [scheme, setScheme] = useState<Scheme>(() => currentScheme());
   const [activeTheme, setActiveTheme] = useState<ITheme>(() => resolveThemeSync(config, scheme));
+  const [connecting, setConnecting] = useState(true);
+  const [banner, setBanner] = useState<string | null>(null);
   const [modifiers, setModifiers] = useState<Modifiers>({ ctrl: "off", alt: "off" });
   const modifiersRef = useRef(modifiers);
   modifiersRef.current = modifiers;
@@ -349,12 +367,13 @@ function TerminalSession(props: {
       onMessage: (message) => {
         switch (message.message.case) {
           case "authBanner":
-            terminal.write(message.message.value.message.replaceAll("\n", "\r\n"));
+            setBanner(message.message.value.message);
             break;
           case "ready":
             ready = true;
             lastStatus = null;
             setStatusLine(null);
+            setConnecting(false);
             break;
           case "output":
             terminal.write(message.message.value.data);
@@ -370,12 +389,14 @@ function TerminalSession(props: {
             }
             lastStatus = text;
             setStatusLine(text);
+            setConnecting(false);
             onExitRef.current(exit.exitCode === 0 && exit.errorMessage === "");
             break;
           }
           case "error":
             lastStatus = message.message.value.message;
             setStatusLine(lastStatus);
+            setConnecting(false);
             break;
         }
       },
@@ -389,6 +410,7 @@ function TerminalSession(props: {
         } else {
           setStatusLine(lastStatus ?? tRef.current("Session closed"));
         }
+        setConnecting(false);
         terminal.options.cursorBlink = false;
       },
     });
@@ -558,20 +580,29 @@ function TerminalSession(props: {
   if (activeTheme.background) {
     hostStyle.background = activeTheme.background;
   }
-  if (!props.active) {
-    hostStyle.display = "none";
-  }
   if (barVisible) {
     hostStyle.paddingBottom = `calc(${keyboardInset + SYMBOL_BAR_HEIGHT + 8}px + env(safe-area-inset-bottom, 0px))`;
   }
 
   return (
     <>
-      <div
-        className="terminal-host"
-        style={Object.keys(hostStyle).length > 0 ? hostStyle : undefined}
-        ref={hostRef}
-      />
+      <div className={styles.terminalHostWrap} style={!props.active ? { display: "none" } : undefined}>
+        <div
+          className={styles.terminalHost}
+          style={Object.keys(hostStyle).length > 0 ? hostStyle : undefined}
+          ref={hostRef}
+        />
+        {props.active && connecting && (
+          <div className={styles.terminalConnecting}>
+            <Spinner className={styles.terminalConnectingSpinner} />
+            {banner ? (
+              <div className={cx("card", styles.terminalBanner)}>{linkifyBanner(banner)}</div>
+            ) : (
+              <span className={styles.terminalConnectingLabel}>{t("Connecting...")}</span>
+            )}
+          </div>
+        )}
+      </div>
       {barVisible && (
         <TerminalSymbolBar
           modifiers={modifiers}
