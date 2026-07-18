@@ -36,11 +36,10 @@
   min-height: 0;
 }
 
-/* Terminal page chrome. The page root carries the global `terminal-page`
-   marker (`page page-full terminal-page`) so body-level `:has()` and xterm
-   vendor selectors can hook the feature; these rules previously lived in
-   globals.css and are co-located with the terminal view here. */
 :global(.page.terminal-page) {
+  --scrollbar-thumb: var(--scrollbar-thumb-on-dark);
+  --scrollbar-thumb-hover: var(--scrollbar-thumb-hover-on-dark);
+
   padding: 0;
 }
 
@@ -67,6 +66,37 @@
   white-space: nowrap;
 }
 
+:global(.terminal-page) .window-header {
+  height: 52px;
+  min-height: 52px;
+  padding: 0 var(--space-12);
+  -webkit-app-region: drag;
+}
+
+:global(.terminal-page) .window-header :global(button),
+:global(.terminal-page) .window-header :global(.menu-anchor) {
+  -webkit-app-region: no-drag;
+}
+
+:global(.terminal-page) .window-header :global(.page-title) {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: normal;
+}
+
+:global(body[data-platform="darwin"] .terminal-page) .window-header {
+  --titlebar-inset: 96px;
+
+  padding-inline-start: var(--titlebar-inset);
+}
+
+:global(body[data-platform="win32"] .terminal-page) .window-header {
+  --window-controls-inset: 150px;
+
+  padding-inline-end: var(--window-controls-inset);
+}
+
 :global(.terminal-page .xterm-viewport) {
   scrollbar-width: none;
 }
@@ -78,21 +108,21 @@
 
 :global(.terminal-page .xterm-scrollable-element > .scrollbar.vertical),
 :global(.terminal-page .xterm-scrollable-element > .scrollbar.vertical > .slider) {
-  width: 7px !important;
+  width: var(--scrollbar-size) !important;
 }
 
 :global(.terminal-page .xterm-scrollable-element > .scrollbar.horizontal),
 :global(.terminal-page .xterm-scrollable-element > .scrollbar.horizontal > .slider) {
-  height: 7px !important;
+  height: var(--scrollbar-size) !important;
 }
 
 :global(.terminal-page .xterm-scrollable-element > .scrollbar > .slider) {
-  background: rgb(255 255 255 / 22%) !important;
+  background: var(--scrollbar-thumb) !important;
   border-radius: var(--radius-xs);
 }
 
 :global(.terminal-page .xterm-scrollable-element > .scrollbar > .slider:hover) {
-  background: rgb(255 255 255 / 38%) !important;
+  background: var(--scrollbar-thumb-hover) !important;
 }
 
 .terminal-connecting {

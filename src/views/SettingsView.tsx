@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   createServerId,
@@ -9,11 +9,22 @@ import {
   type Server,
   type ServersState,
 } from "../api/config";
-import { navigate, type AccentPreference, type ThemePreference } from "../app/context";
+import { formatBytes } from "../api/format";
+import { useStream } from "../api/stream";
+import { navigate, useApi, type AccentPreference, type ThemePreference } from "../app/context";
+import { useDesktopHost, useLocalDesktopHost } from "../app/desktop";
+import type { DesktopHost, DesktopSettingsState, DesktopUpdateTrack } from "../app/desktop";
+import {
+  loadDisableDeprecatedWarnings,
+  saveDisableDeprecatedWarnings,
+} from "../app/deprecatedWarnings";
+import { showError } from "../app/errorStore";
+import { ServiceStatus_Type } from "../gen/daemon/started_service_pb";
 import { LanguageSelect, useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
+import { PageHeader } from "../components/PageHeader";
 import { ReachabilityIndicator, useServerReachability } from "../components/ReachabilityIndicator";
-import { Button, Dialog, Field, IconButton, NavRow, Select, Spinner, ThemeMenu, ThemeSelect } from "../components/ui";
+import { Button, Dialog, Field, IconButton, MenuItem, MenuLink, NavRow, SecretInput, Select, Spinner, ThemeMenu, ThemeSelect, useContextMenu } from "../components/ui";
 import {
   DEFAULT_DARK_THEME_NAME,
   DEFAULT_LIGHT_THEME_NAME,
@@ -22,27 +33,40 @@ import {
   type TerminalConfig,
 } from "../lib/tailscaleSSH";
 import { parseCustomTheme, type Scheme, type TerminalThemeEntry } from "../lib/terminalTheme";
+import { openUpdateDialog, useUpdatesState } from "./UpdateViews";
 import styles from "./SettingsView.module.css";
 import { cx } from "../lib/cx";
 
 export function SettingsView() {
   const { t } = useI18n();
+  const host = useDesktopHost();
+  const localHost = useLocalDesktopHost();
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1 className="page-title">{t("Settings")}</h1>
-      </div>
+      <PageHeader title={t("Settings")} />
       <div className="settings-stack">
         <div className="nav-list">
-          <NavRow
-            icon="tune"
-            title={t("Preferences")}
-            onClick={() => navigate("settings/preferences")}
-          />
+          {host === null && (
+            <NavRow
+              icon="tune"
+              title={t("Preferences")}
+              onClick={() => navigate("settings/preferences")}
+            />
+          )}
+          {host !== null && (
+            <NavRow icon="info" title={t("App")} onClick={() => navigate("settings/app")} />
+          )}
+          {localHost !== null && (
+            <NavRow
+              icon="memory"
+              title={t("Core")}
+              onClick={() => navigate("settings/core")}
+            />
+          )}
           <NavRow
             icon="dns"
-            title={t("Servers")}
+            title={host !== null ? t("Remote Control") : t("Servers")}
             onClick={() => navigate("settings/servers")}
           />
         </div>
@@ -53,15 +77,383 @@ export function SettingsView() {
               icon="description"
               title={t("Documentation")}
               href="https://sing-box.sagernet.org"
+              contextMenu={
+                host !== null ? (
+                  <>
+                    <MenuLink href="https://sing-box.sagernet.org/changelog/">
+                      {t("Changelog")}
+                    </MenuLink>
+                    <MenuLink href="https://sing-box.sagernet.org/configuration/">
+                      {t("Configuration")}
+                    </MenuLink>
+                  </>
+                ) : undefined
+              }
             />
             <NavRow
               icon="code"
               title={t("Source Code")}
-              href="https://github.com/SagerNet/sing-box-dashboard"
+              href={
+                host !== null
+                  ? "https://github.com/SagerNet/sing-box"
+                  : "https://github.com/SagerNet/sing-box-dashboard"
+              }
+              contextMenu={
+                host !== null ? (
+                  <MenuLink href="https://github.com/SagerNet/sing-box/releases">
+                    {t("Releases")}
+                  </MenuLink>
+                ) : undefined
+              }
             />
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+export function AppSettingsView(props: {
+  theme: ThemePreference;
+  onThemeChange: (theme: ThemePreference) => void;
+  accent: AccentPreference;
+  onAccentChange: (accent: AccentPreference) => void;
+}) {
+  const host = useDesktopHost();
+  if (host === null) {
+    return null;
+  }
+  return <AppSettingsContent host={host} {...props} />;
+}
+
+function AppSettingsContent({
+  host,
+  ...preferences
+}: {
+  host: DesktopHost;
+  theme: ThemePreference;
+  onThemeChange: (theme: ThemePreference) => void;
+  accent: AccentPreference;
+  onAccentChange: (accent: AccentPreference) => void;
+}) {
+  const { t } = useI18n();
+  const [settings, setSettings] = useState<DesktopSettingsState | null>(null);
+  const [cacheSize, setCacheSize] = useState<number | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [savingOpenAtLogin, setSavingOpenAtLogin] = useState(false);
+
+  useEffect(() => {
+    let stale = false;
+    host.settings
+      .get()
+      .then((value) => {
+        if (!stale) {
+          setSettings(() => value);
+        }
+      })
+      .catch(showError);
+    host.settings
+      .cacheSize()
+      .then((value) => {
+        if (!stale) {
+          setCacheSize(() => value);
+        }
+      })
+      .catch(showError);
+    return () => {
+      stale = true;
+    };
+  }, [host]);
+
+  const clearCache = () => {
+    setClearing(true);
+    host.settings
+      .clearCache()
+      .then(() => host.settings.cacheSize())
+      .then(setCacheSize)
+      .catch(showError)
+      .finally(() => setClearing(false));
+  };
+
+  const refreshOpenAtLogin = () =>
+    host.settings.get().then(({ openAtLogin }) => {
+      setSettings((current) =>
+        current === null ? current : { ...current, openAtLogin },
+      );
+    });
+
+  return (
+    <div className="page">
+      <SettingsPageHeader title={t("App")} />
+      <div className="settings-stack">
+        {settings === null ? (
+          <Spinner />
+        ) : (
+          <>
+            <div className={styles.settingsList}>
+              <div className="settings-row">
+                <span className="settings-row-label">{t("Language")}</span>
+                <LanguageSelect />
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t("Appearance")}</span>
+                <ThemeSelect theme={preferences.theme} onChange={preferences.onThemeChange} />
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t("Theme")}</span>
+                <ThemeMenu accent={preferences.accent} onChange={preferences.onAccentChange} />
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t("Start At Login")}</span>
+                <button
+                  type="button"
+                  className={settings.openAtLogin ? "switch on" : "switch"}
+                  role="switch"
+                  aria-checked={settings.openAtLogin}
+                  aria-label={t("Start At Login")}
+                  disabled={savingOpenAtLogin}
+                  onClick={() => {
+                    const value = !settings.openAtLogin;
+                    setSettings({ ...settings, openAtLogin: value });
+                    setSavingOpenAtLogin(true);
+                    host.settings
+                      .setOpenAtLogin(value)
+                      .then(refreshOpenAtLogin)
+                      .catch((error) => {
+                        showError(error);
+                        return refreshOpenAtLogin().catch(showError);
+                      })
+                      .finally(() => setSavingOpenAtLogin(false));
+                  }}
+                />
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t("Enable Tray")}</span>
+                <button
+                  type="button"
+                  className={settings.trayEnabled ? "switch on" : "switch"}
+                  role="switch"
+                  aria-checked={settings.trayEnabled}
+                  aria-label={t("Enable Tray")}
+                  onClick={() => {
+                    const value = !settings.trayEnabled;
+                    setSettings({
+                      ...settings,
+                      trayEnabled: value,
+                    });
+                    host.settings.setTrayEnabled(value).catch(showError);
+                  }}
+                />
+              </div>
+              {settings.trayEnabled && (
+                <div className="settings-row">
+                  <span className="settings-row-label">{t("Keep Tray in Background")}</span>
+                  <button
+                    type="button"
+                    className={settings.trayInBackground ? "switch on" : "switch"}
+                    role="switch"
+                    aria-checked={settings.trayInBackground}
+                    aria-label={t("Keep Tray in Background")}
+                    onClick={() => {
+                      const value = !settings.trayInBackground;
+                      setSettings({ ...settings, trayInBackground: value });
+                      host.settings.setTrayInBackground(value).catch(showError);
+                    }}
+                  />
+                </div>
+              )}
+              <div className="settings-row">
+                <span className="settings-row-label">{t("Cache Size")}</span>
+                {cacheSize === null ? (
+                  <Spinner />
+                ) : (
+                  <span className="nav-row-detail">{formatBytes(cacheSize)}</span>
+                )}
+              </div>
+              {cacheSize !== null && cacheSize > 0 && (
+                <button
+                  type="button"
+                  className={cx("settings-row", styles.destructiveRow)}
+                  disabled={clearing}
+                  onClick={clearCache}
+                >
+                  <span className="settings-row-label">{t("Clear Cache")}</span>
+                  {clearing && <Spinner />}
+                </button>
+              )}
+            </div>
+            <UpdateSettingsSection host={host} />
+            <div>
+              <div className="list-section-title">Tailscale</div>
+              <div className="nav-list">
+                <NavRow
+                  icon="terminal"
+                  title={t("Terminal Configuration")}
+                  onClick={() => navigate("settings/preferences/terminal")}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UpdateSettingsSection({ host }: { host: DesktopHost }) {
+  const { t } = useI18n();
+  const updates = useUpdatesState(host);
+  const [noUpdatesVisible, setNoUpdatesVisible] = useState(false);
+  const [githubTokenVisible, setGitHubTokenVisible] = useState(false);
+  const [githubToken, setGitHubToken] = useState("");
+  const [githubTokenLoading, setGitHubTokenLoading] = useState(false);
+  const [githubTokenSaving, setGitHubTokenSaving] = useState(false);
+
+  if (updates === null || !updates.supported) {
+    return null;
+  }
+
+  const checkNow = () => {
+    host.updates
+      .check()
+      .then((info) => {
+        if (info !== null) {
+          openUpdateDialog();
+        } else {
+          setNoUpdatesVisible(true);
+        }
+      })
+      .catch(showError);
+  };
+
+  const editGitHubToken = () => {
+    setGitHubToken("");
+    setGitHubTokenVisible(true);
+    setGitHubTokenLoading(true);
+    host.updates
+      .getGitHubToken()
+      .then(setGitHubToken)
+      .catch((error) => {
+        setGitHubTokenVisible(false);
+        showError(error);
+      })
+      .finally(() => setGitHubTokenLoading(false));
+  };
+
+  const saveGitHubToken = () => {
+    setGitHubTokenSaving(true);
+    host.updates
+      .setGitHubToken(githubToken)
+      .then(() => setGitHubTokenVisible(false))
+      .catch(showError)
+      .finally(() => setGitHubTokenSaving(false));
+  };
+
+  const githubTokenBusy = githubTokenLoading || githubTokenSaving;
+
+  return (
+    <div>
+      <div className="list-section-title">{t("Update")}</div>
+      <div className={styles.settingsList}>
+        {updates.stableTrackAvailable && (
+          <div className="settings-row">
+            <span className="settings-row-label">{t("Update Track")}</span>
+            <Select<DesktopUpdateTrack>
+              inline
+              options={[
+                { value: "stable", label: t("Stable") },
+                { value: "beta", label: t("Beta") },
+              ]}
+              value={updates.track}
+              onChange={(track) => {
+                void host.updates.setTrack(track).catch(showError);
+              }}
+            />
+          </div>
+        )}
+        <button type="button" className="settings-row" onClick={editGitHubToken}>
+          <span className="settings-row-label">{t("GitHub Token")}</span>
+          <Icon name="keyboard_arrow_right" size={14} />
+        </button>
+        <div className="settings-row">
+          <span className="settings-row-label">{t("Automatic Update Check")}</span>
+          <button
+            type="button"
+            className={updates.checkUpdateEnabled ? "switch on" : "switch"}
+            role="switch"
+            aria-checked={updates.checkUpdateEnabled}
+            aria-label={t("Automatic Update Check")}
+            onClick={() => {
+              void host.updates
+                .setCheckUpdateEnabled(!updates.checkUpdateEnabled)
+                .catch(showError);
+            }}
+          />
+        </div>
+        <button
+          type="button"
+          className="settings-row"
+          disabled={updates.checking}
+          onClick={checkNow}
+        >
+          <span className="settings-row-label">{t("Check Update")}</span>
+          {updates.checking && <Spinner />}
+        </button>
+        {updates.info !== null && (
+          <button type="button" className="settings-row" onClick={openUpdateDialog}>
+            <span className="settings-row-label">
+              {t("New version available: {version}", { version: updates.info.versionName })}
+            </span>
+            <Icon name="keyboard_arrow_right" size={14} />
+          </button>
+        )}
+      </div>
+      {noUpdatesVisible && (
+        <Dialog onClose={() => setNoUpdatesVisible(false)}>
+          <h3>{t("Check Update")}</h3>
+          <p className="dialog-message">{t("No updates available")}</p>
+          <div className="row-actions dialog-actions">
+            <Button variant="primary" onClick={() => setNoUpdatesVisible(false)}>
+              {t("Ok")}
+            </Button>
+          </div>
+        </Dialog>
+      )}
+      {githubTokenVisible && (
+        <Dialog
+          onClose={() => {
+            if (!githubTokenBusy) {
+              setGitHubTokenVisible(false);
+            }
+          }}
+        >
+          <h3>{t("GitHub Token")}</h3>
+          {githubTokenLoading ? (
+            <Spinner />
+          ) : (
+            <Field label={t("GitHub Token")}>
+              <SecretInput
+                value={githubToken}
+                placeholder={t("Get higher GitHub API rate limits")}
+                disabled={githubTokenSaving}
+                onChange={setGitHubToken}
+              />
+            </Field>
+          )}
+          <div className="row-actions dialog-actions">
+            <Button disabled={githubTokenBusy} onClick={() => setGitHubTokenVisible(false)}>
+              {t("Cancel")}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={githubTokenBusy}
+              onClick={saveGitHubToken}
+            >
+              {t("Save")}
+            </Button>
+          </div>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -75,16 +467,218 @@ function SettingsPageHeader(props: {
   const { t } = useI18n();
   const back = props.back ?? "settings";
   return (
-    <div className="page-header">
-      <button
-        className="back-button"
-        aria-label={props.backLabel ?? t("Settings")}
-        onClick={() => navigate(back)}
-      >
-        <Icon name="arrow_back" size={20} />
-      </button>
-      <h1 className="page-title">{props.title}</h1>
-      {props.action && <div className="actions">{props.action}</div>}
+    <PageHeader
+      title={props.title}
+      actions={props.action}
+      back={{ label: props.backLabel ?? t("Settings"), onClick: () => navigate(back) }}
+    />
+  );
+}
+
+export function CoreView() {
+  const host = useLocalDesktopHost();
+  if (host === null) {
+    return null;
+  }
+  return <CoreViewContent host={host} />;
+}
+
+function CoreViewContent({ host }: { host: DesktopHost }) {
+  const { t } = useI18n();
+  const api = useApi();
+  const serviceStatus = useStream(api.serviceStatus);
+  const [coreVersion, setCoreVersion] = useState<string | null>(null);
+  const [securitySettings, setSecuritySettings] = useState<{
+    available: boolean;
+    insecureModeEnabled: boolean;
+  } | null>(null);
+  const [savingInsecureMode, setSavingInsecureMode] = useState(false);
+  const [dataSize, setDataSize] = useState<number | "unavailable" | null>(null);
+  const [disableWarnings, setDisableWarnings] = useState(loadDisableDeprecatedWarnings);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const copyMenu = useContextMenu(
+    <MenuItem
+      icon="content_copy"
+      onSelect={() => {
+        void navigator.clipboard.writeText(coreVersion ?? "").catch(showError);
+      }}
+    >
+      {t("Copy")}
+    </MenuItem>,
+  );
+
+  const running =
+    serviceStatus.data.status?.status === ServiceStatus_Type.STARTED ||
+    serviceStatus.data.status?.status === ServiceStatus_Type.STARTING;
+
+  const loadInfo = useCallback(() => {
+    setCoreVersion(null);
+    host.core
+      .info()
+      .then((value) => setCoreVersion(value.version))
+      .catch(showError);
+  }, [host]);
+
+  useEffect(() => {
+    loadInfo();
+  }, [loadInfo]);
+
+  const refreshSecuritySettings = useCallback(
+    () => host.core.securitySettings().then(setSecuritySettings),
+    [host],
+  );
+
+  useEffect(() => {
+    refreshSecuritySettings().catch(showError);
+  }, [refreshSecuritySettings]);
+
+  const refreshSize = useCallback(() => {
+    setDataSize(null);
+    host.core
+      .workingDirectory()
+      .then((value) => setDataSize(value.size))
+      .catch(() => setDataSize("unavailable"));
+  }, [host]);
+
+  useEffect(() => {
+    refreshSize();
+  }, [refreshSize]);
+
+  const destroy = () => {
+    setBusy(true);
+    host.core
+      .destroyWorkingDirectory()
+      .then(() => {
+        setConfirming(false);
+        loadInfo();
+        refreshSize();
+      })
+      .catch(showError)
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="page">
+      <SettingsPageHeader title={t("Core")} />
+      <div className="settings-stack">
+        {coreVersion === null ? (
+          <Spinner />
+        ) : (
+          <>
+            <div className={styles.settingsList}>
+              <div className="settings-row" onContextMenu={copyMenu.onContextMenu}>
+                <span className="settings-row-label">{t("Version")}</span>
+                <span className="nav-row-detail">{coreVersion}</span>
+                {copyMenu.element}
+              </div>
+              <div className="settings-row">
+                <span className="settings-row-label">{t("Data Size")}</span>
+                {dataSize === null ? (
+                  <Spinner />
+                ) : dataSize === "unavailable" ? (
+                  <span className={styles.fieldError}>{t("Unavailable")}</span>
+                ) : (
+                  <span className="nav-row-detail">{formatBytes(dataSize)}</span>
+                )}
+              </div>
+            </div>
+            {securitySettings?.available && (
+              <div>
+                <div className="list-section-title">{t("Security")}</div>
+                <div className={styles.settingsList}>
+                  <div className="settings-row">
+                    <div className={styles.rowText}>
+                      <span className="settings-row-label">{t("Insecure Mode")}</span>
+                      <span className="hint">
+                        {t("Allow configurations to use privileges unrelated to networking.")}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className={securitySettings.insecureModeEnabled ? "switch on" : "switch"}
+                      role="switch"
+                      aria-checked={securitySettings.insecureModeEnabled}
+                      aria-label={t("Insecure Mode")}
+                      disabled={savingInsecureMode}
+                      onClick={() => {
+                        const enabled = !securitySettings.insecureModeEnabled;
+                        setSecuritySettings({ ...securitySettings, insecureModeEnabled: enabled });
+                        setSavingInsecureMode(true);
+                        host.core
+                          .setInsecureModeEnabled(enabled)
+                          .then(refreshSecuritySettings)
+                          .catch((error) => {
+                            showError(error);
+                            return refreshSecuritySettings().catch(showError);
+                          })
+                          .finally(() => setSavingInsecureMode(false));
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+            {coreVersion.includes("-") && (
+              <div>
+                <div className="list-section-title">{t("Beta Settings")}</div>
+                <div className={styles.settingsList}>
+                  <div className="settings-row">
+                    <div className={styles.rowText}>
+                      <span className="settings-row-label">{t("Disable Deprecated Warnings")}</span>
+                      <span className="hint">
+                        {t("Do not show warnings about usages of deprecated features.")}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className={disableWarnings ? "switch on" : "switch"}
+                      role="switch"
+                      aria-checked={disableWarnings}
+                      aria-label={t("Disable Deprecated Warnings")}
+                      onClick={() => {
+                        const value = !disableWarnings;
+                        setDisableWarnings(value);
+                        saveDisableDeprecatedWarnings(value);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+            <div>
+              <div className="list-section-title">{t("Working Directory")}</div>
+              <div className={styles.settingsList}>
+                <button
+                  type="button"
+                  className={cx("settings-row", styles.destructiveRow)}
+                  disabled={busy}
+                  onClick={() => (running ? setConfirming(true) : destroy())}
+                >
+                  <span className="settings-row-label">{t("Destroy")}</span>
+                  {busy && !confirming && <Spinner />}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+      {confirming && (
+        <Dialog onClose={() => (busy ? undefined : setConfirming(false))}>
+          <h3>{t("Service is Running")}</h3>
+          <p className="dialog-message">
+            {t("The service must be stopped before destroying the working directory.")}
+          </p>
+          <div className="row-actions dialog-actions">
+            <Button onClick={() => setConfirming(false)} disabled={busy}>
+              {t("Cancel")}
+            </Button>
+            <Button variant="danger" onClick={destroy} disabled={busy}>
+              {busy ? <Spinner /> : t("Stop Service and Continue")}
+            </Button>
+          </div>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -134,8 +728,6 @@ export function PreferencesView(props: {
 
 const FONT_SIZES = [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32];
 
-// Common monospace families; the live terminal appends a generic monospace
-// fallback, so unavailable choices degrade gracefully.
 const FONT_FAMILIES = [
   "Menlo",
   "Monaco",
@@ -168,21 +760,24 @@ function ThemeSchemeSection(props: {
   const { scheme, name, custom } = props;
   const isDark = scheme === "dark";
   const isCustom = name === "";
-  // Remember the last named theme so toggling "Custom" off restores it.
-  const remembered = useRef(name || (isDark ? DEFAULT_DARK_THEME_NAME : DEFAULT_LIGHT_THEME_NAME));
-  if (!isCustom) {
-    remembered.current = name;
-  }
+  const remembered = useRef(
+    name || (isDark ? DEFAULT_DARK_THEME_NAME : DEFAULT_LIGHT_THEME_NAME),
+  );
   const invalid = isCustom && custom.trim() !== "" && parseCustomTheme(custom) === null;
 
-  const setName = (value: string) =>
+  const setName = (value: string) => {
+    if (value !== "") {
+      remembered.current = value;
+    }
     props.onChange(isDark ? { darkThemeName: value } : { lightThemeName: value });
+  };
 
   return (
     <div>
       <div className="list-section-title">{isDark ? t("Dark") : t("Light")}</div>
       <div className={styles.settingsList}>
         <button
+          type="button"
           className="settings-row"
           disabled={isCustom}
           onClick={() => navigate(`settings/preferences/terminal/theme/${scheme}`)}
@@ -196,6 +791,7 @@ function ThemeSchemeSection(props: {
         <div className="settings-row">
           <span className="settings-row-label">{t("Custom theme")}</span>
           <button
+            type="button"
             className={isCustom ? "switch on" : "switch"}
             role="switch"
             aria-checked={isCustom}
@@ -205,6 +801,7 @@ function ThemeSchemeSection(props: {
         </div>
         {isCustom && (
           <button
+            type="button"
             className="settings-row"
             onClick={() => navigate(`settings/preferences/terminal/custom/${scheme}`)}
           >
@@ -222,6 +819,7 @@ function ThemeSchemeSection(props: {
 
 export function TerminalConfigurationView() {
   const { t } = useI18n();
+  const host = useDesktopHost();
   const [config, setConfig] = useState<TerminalConfig>(loadTerminalConfig);
 
   const update = (patch: Partial<TerminalConfig>) => {
@@ -234,8 +832,8 @@ export function TerminalConfigurationView() {
     <div className="page">
       <SettingsPageHeader
         title={t("Terminal Configuration")}
-        back="settings/preferences"
-        backLabel={t("Preferences")}
+        back={host !== null ? "settings/app" : "settings/preferences"}
+        backLabel={host !== null ? t("App") : t("Preferences")}
       />
       <div className="settings-stack">
         <ThemeSchemeSection
@@ -282,6 +880,7 @@ export function TerminalConfigurationView() {
             <div className="settings-row">
               <span className="settings-row-label">{t("Always show")}</span>
               <button
+                type="button"
                 className={config.symbolBarAlwaysShow ? "switch on" : "switch"}
                 role="switch"
                 aria-checked={config.symbolBarAlwaysShow}
@@ -305,14 +904,6 @@ export function TerminalThemeEditorView(props: { scheme: Scheme }) {
   });
   const invalid = value.trim() !== "" && parseCustomTheme(value) === null;
 
-  const change = (next: string) => {
-    setValue(next);
-    const latest = loadTerminalConfig();
-    saveTerminalConfig(
-      isDark ? { ...latest, darkThemeCustom: next } : { ...latest, lightThemeCustom: next },
-    );
-  };
-
   return (
     <div className="page">
       <SettingsPageHeader
@@ -328,7 +919,14 @@ export function TerminalThemeEditorView(props: { scheme: Scheme }) {
           autoCorrect="off"
           placeholder={CUSTOM_THEME_PLACEHOLDER}
           value={value}
-          onChange={(event) => change(event.target.value)}
+          onChange={(event) => {
+            const next = event.target.value;
+            setValue(() => next);
+            const latest = loadTerminalConfig();
+            saveTerminalConfig(
+              isDark ? { ...latest, darkThemeCustom: next } : { ...latest, lightThemeCustom: next },
+            );
+          }}
         />
         {invalid && <span className={styles.fieldError}>{t("Invalid theme JSON")}</span>}
         <p className={styles.themeEditorNote}>
@@ -348,7 +946,6 @@ export function TerminalThemeEditorView(props: { scheme: Scheme }) {
 
 function ThemePreview({ theme }: { theme: TerminalThemeEntry["theme"] }) {
   const fg = theme.foreground;
-  // ANSI slots are absent on the built-in themes; fall back to the foreground.
   const color = (value?: string) => value ?? fg;
   return (
     <span className={styles.themePreview} style={{ background: theme.background, color: fg }}>
@@ -381,7 +978,9 @@ export function TerminalThemePickerView(props: { scheme: Scheme }) {
     let active = true;
     void import("../lib/terminalThemes").then((module) => {
       if (active) {
-        setThemes(module.themesForScheme(props.scheme === "dark"));
+        setThemes(
+          module.TERMINAL_THEMES.filter((entry) => entry.isDark === (props.scheme === "dark")),
+        );
       }
     });
     return () => {
@@ -434,6 +1033,7 @@ export function TerminalThemePickerView(props: { scheme: Scheme }) {
           <div className={styles.settingsList}>
             {filtered.map((entry) => (
               <button
+                type="button"
                 key={entry.name}
                 className={cx("settings-row", styles.themePickerRow)}
                 onClick={() => select(entry.name)}
@@ -455,6 +1055,7 @@ export function ServersView(props: {
   onServersChange: (state: ServersState) => void;
 }) {
   const { t } = useI18n();
+  const host = useDesktopHost();
   const { servers } = props.serversState;
   const [editing, setEditing] = useState<Server | "new" | null>(null);
 
@@ -471,29 +1072,41 @@ export function ServersView(props: {
   return (
     <div className="page">
       <SettingsPageHeader
-        title={t("Servers")}
+        title={host !== null ? t("Remote Control") : t("Servers")}
         action={
           <IconButton
-            aria-label={t("Add server")}
-            title={t("Add server")}
+            aria-label={t("New Server")}
+            title={t("New Server")}
             onClick={() => setEditing("new")}
           >
             <Icon name="add" size={18} />
           </IconButton>
         }
       />
-      <div className="nav-list">
-        {servers.map((server) => (
-          <button className={styles.serverItem} key={server.id} onClick={() => setEditing(server)}>
-            <span className={styles.serverItemText}>
-              <span className="server-row-name">{serverDisplayName(server)}</span>
-              <span className="server-row-url">{server.url}</span>
-            </span>
-            <span className="settings-row-chevron">
-              <Icon name="keyboard_arrow_right" size={14} />
-            </span>
-          </button>
-        ))}
+      <div>
+        {host !== null && <div className="list-section-title">{t("Servers")}</div>}
+        <div className="nav-list">
+          {servers.length === 0 ? (
+            <div className={styles.emptyRow}>{t("No servers")}</div>
+          ) : (
+            servers.map((server) => (
+              <button
+                type="button"
+                className={styles.serverItem}
+                key={server.id}
+                onClick={() => setEditing(server)}
+              >
+                <span className={styles.serverItemText}>
+                  <span className="server-row-name">{serverDisplayName(server)}</span>
+                  <span className="server-row-url">{server.url}</span>
+                </span>
+                <span className="settings-row-chevron">
+                  <Icon name="keyboard_arrow_right" size={14} />
+                </span>
+              </button>
+            ))
+          )}
+        </div>
       </div>
       {editing !== null && (
         <ServerDialog
@@ -554,18 +1167,11 @@ export function ServerDialog(props: {
             className="input"
             value={url}
             placeholder={t("Required")}
-            autoFocus={!props.server}
             onChange={(event) => setUrl(event.target.value)}
           />
         </Field>
         <Field label={t("Secret")}>
-          <input
-            className="input"
-            value={secret}
-            placeholder={t("Optional")}
-            autoComplete="off"
-            onChange={(event) => setSecret(event.target.value)}
-          />
+          <SecretInput value={secret} placeholder={t("Optional")} onChange={setSecret} />
         </Field>
         <ReachabilityIndicator reachability={reachability} url={url} />
         <div className="row-actions dialog-actions">

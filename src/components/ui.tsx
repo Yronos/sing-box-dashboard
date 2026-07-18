@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type MouseEventHandler, type ReactNode } from "react";
+import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type MouseEventHandler, type ReactElement, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { encode as encodeQR } from "uqr";
 
 import type { DelayTone } from "../api/format";
@@ -14,6 +15,7 @@ import {
 import { showError } from "../app/errorStore";
 import { useDismiss } from "../app/hooks";
 import { useI18n, type MessageKey } from "../app/i18n";
+import { useLatestRef } from "../app/useLatest";
 import { cx } from "../lib/cx";
 import { Icon, type IconName } from "./Icon";
 
@@ -60,8 +62,6 @@ export function DetailSection(props: { title?: ReactNode; accessory?: ReactNode;
 
 export type BadgeTone = DelayTone | "danger" | "info" | "accent";
 
-// "neutral" is the default styling (no modifier class); every other tone maps
-// to a same-named class. Returns false (not "") so cx drops it cleanly.
 function toneClass<T extends string>(tone: T | undefined): T | false {
   return tone && tone !== "neutral" ? tone : false;
 }
@@ -78,11 +78,12 @@ export function Spinner(props: { className?: string }) {
   return <span className={cx("spinner", props.className)} />;
 }
 
-export function Brand(props: { className?: string }) {
+export function Brand(props: { className?: string; product?: string | null }) {
+  const product = props.product === undefined ? "dashboard" : props.product;
   return (
     <div className={cx("setup-brand", props.className)}>
       sing-box
-      <small>dashboard</small>
+      {product !== null && <small>{product}</small>}
     </div>
   );
 }
@@ -160,16 +161,51 @@ export function EmptyState(props: { icon?: IconName; className?: string; childre
   );
 }
 
+export function useContextMenu(menu: ReactNode) {
+  const [point, setPoint] = useState<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useDismiss(menuRef, point !== null, () => setPoint(null));
+  const onContextMenu: MouseEventHandler<HTMLElement> = (event) => {
+    event.preventDefault();
+    setPoint({ x: event.clientX, y: event.clientY });
+  };
+  const element =
+    point !== null
+      ? createPortal(
+          <div
+            ref={menuRef}
+            className="menu context-menu"
+            role="menu"
+            style={{ left: point.x, top: point.y }}
+            onClick={() => setPoint(null)}
+            onKeyUp={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                setPoint(null);
+              }
+            }}
+          >
+            {menu}
+          </div>,
+          document.body,
+        )
+      : null;
+  return { onContextMenu, element };
+}
+
 export function NavRow(props: {
-  icon: IconName;
+  icon?: IconName;
   title: string;
   detail?: ReactNode;
   onClick?: () => void;
   href?: string;
+  contextMenu?: ReactNode;
 }) {
+  const contextMenu = useContextMenu(props.contextMenu);
+  const onContextMenu = props.contextMenu != null ? contextMenu.onContextMenu : undefined;
+  const menu = contextMenu.element;
   const inner = (
     <>
-      <Icon name={props.icon} size={15} />
+      {props.icon && <Icon name={props.icon} size={15} />}
       <span>{props.title}</span>
       {props.detail != null && <span className="nav-row-detail">{props.detail}</span>}
       <Icon name={props.href ? "open_in_new" : "keyboard_arrow_right"} size={14} />
@@ -177,41 +213,73 @@ export function NavRow(props: {
   );
   if (props.href) {
     return (
-      <a className="nav-row" href={props.href} target="_blank" rel="noreferrer">
+      <>
+        <a
+          className="nav-row"
+          href={props.href}
+          target="_blank"
+          rel="noreferrer"
+          onContextMenu={onContextMenu}
+        >
+          {inner}
+        </a>
+        {menu}
+      </>
+    );
+  }
+  return (
+    <>
+      <button type="button" className="nav-row" onClick={props.onClick} onContextMenu={onContextMenu}>
+        {inner}
+      </button>
+      {menu}
+    </>
+  );
+}
+
+export function NavLines(props: { children: ReactNode }) {
+  return <div className="nav-lines">{props.children}</div>;
+}
+
+export function NavLine(props: {
+  icon: IconName;
+  label: ReactNode;
+  value?: ReactNode;
+  chevron?: boolean;
+  onClick?: () => void;
+  href?: string;
+}) {
+  const inner = (
+    <>
+      <Icon name={props.icon} size={15} />
+      <span className="nav-line-label">{props.label}</span>
+      {props.value != null && <span className="nav-line-value">{props.value}</span>}
+      {props.chevron === true && <Icon name="keyboard_arrow_right" size={14} />}
+    </>
+  );
+  if (props.href != null) {
+    return (
+      <a className="nav-line" href={props.href} target="_blank" rel="noreferrer">
         {inner}
       </a>
     );
   }
-  return (
-    <button className="nav-row" onClick={props.onClick}>
-      {inner}
-    </button>
-  );
+  if (props.onClick != null) {
+    return (
+      <button type="button" className="nav-line" onClick={props.onClick}>
+        {inner}
+      </button>
+    );
+  }
+  return <div className="nav-line static">{inner}</div>;
 }
 
-export function SegmentedControl(props: {
-  options: { value: string; label: string }[];
-  value: string;
-  onChange: (value: string) => void;
-  disabled?: boolean;
-}) {
+export function MenuLink(props: { href: string; children: ReactNode }) {
   return (
-    <div className="segmented">
-      {props.options.map((option) => (
-        <button
-          key={option.value}
-          className={option.value === props.value ? "active" : ""}
-          disabled={props.disabled}
-          onClick={() => {
-            if (option.value !== props.value) {
-              props.onChange(option.value);
-            }
-          }}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <a className="menu-item" href={props.href} target="_blank" rel="noreferrer">
+      <span className="menu-check" />
+      {props.children}
+    </a>
   );
 }
 
@@ -233,6 +301,7 @@ export function ThemeSelect(props: {
           key={option.value}
           type="button"
           title={option.title}
+          aria-label={option.title}
           className={props.theme === option.value ? "active" : ""}
           onClick={() => props.onChange(option.value)}
         >
@@ -243,7 +312,7 @@ export function ThemeSelect(props: {
   );
 }
 
-export const ACCENT_TITLES: Record<AccentPreset, MessageKey> = {
+const ACCENT_TITLES: Record<AccentPreset, MessageKey> = {
   default: "Default",
   blue: "Blue",
   purple: "Purple",
@@ -255,7 +324,7 @@ export const ACCENT_TITLES: Record<AccentPreset, MessageKey> = {
   graphite: "Graphite",
 };
 
-export function AccentSelect(props: {
+function AccentSelect(props: {
   accent: AccentPreference;
   onChange: (accent: AccentPreference) => void;
 }) {
@@ -336,6 +405,7 @@ export function ThemeMenu(props: {
 }
 
 export function Select<T extends string | number>(props: {
+  id?: string;
   options: { value: T; label: ReactNode }[];
   value: T;
   onChange: (value: T) => void;
@@ -344,21 +414,14 @@ export function Select<T extends string | number>(props: {
   placeholder?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [openUp, setOpenUp] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => setOpen(false));
+  useMenuPopover(ref, listRef, open, () => setOpen(false), {
+    width: props.inline ? "min-anchor" : "anchor",
+  });
 
   const selected = props.options.find((option) => option.value === props.value);
-
-  const toggle = () => {
-    if (!open && ref.current) {
-      const rect = ref.current.getBoundingClientRect();
-      const below = window.innerHeight - rect.bottom;
-      setOpenUp(below < 260 && rect.top > below);
-    }
-    setOpen(!open);
-  };
 
   const select = (value: T) => {
     setOpen(false);
@@ -395,12 +458,13 @@ export function Select<T extends string | number>(props: {
       onKeyDown={onKeyDown}
     >
       <button
+        id={props.id}
         type="button"
         className={props.inline ? "select inline" : "select"}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={props.disabled}
-        onClick={toggle}
+        onClick={() => setOpen(!open)}
       >
         <span className={selected ? "select-value" : "select-value select-placeholder"}>
           {selected ? selected.label : props.placeholder}
@@ -408,14 +472,11 @@ export function Select<T extends string | number>(props: {
       </button>
       {open && (
         <div
+          popover="manual"
           className={
             props.inline
-              ? openUp
-                ? "menu select-menu grow open-up"
-                : "menu select-menu grow"
-              : openUp
-                ? "menu select-menu open-up"
-                : "menu select-menu"
+              ? "menu popover-menu select-menu grow"
+              : "menu popover-menu select-menu"
           }
           role="listbox"
           ref={listRef}
@@ -471,7 +532,7 @@ export function AdaptiveSegmented(props: {
       <div className="segmented-measure" aria-hidden ref={measureRef}>
         <div className="segmented" style={{ height: "auto" }}>
           {props.options.map((option) => (
-            <button key={option.value} tabIndex={-1}>
+            <button type="button" key={option.value} tabIndex={-1}>
               {option.label}
             </button>
           ))}
@@ -481,6 +542,7 @@ export function AdaptiveSegmented(props: {
         <div className="segmented full">
           {props.options.map((option) => (
             <button
+              type="button"
               key={option.value}
               className={option.value === props.value ? "active" : ""}
               onClick={() => {
@@ -500,19 +562,81 @@ export function AdaptiveSegmented(props: {
   );
 }
 
-export function OthersMenu(props: { children: ReactNode; icon?: IconName; className?: string }) {
+function useMenuPopover(
+  anchorRef: RefObject<HTMLElement | null>,
+  menuRef: RefObject<HTMLDivElement | null>,
+  open: boolean,
+  onDismiss: () => void,
+  options?: { alignEnd?: boolean; width?: "anchor" | "min-anchor" },
+) {
+  const alignEnd = options?.alignEnd === true;
+  const width = options?.width;
+  const dismissRef = useLatestRef(onDismiss);
+  useLayoutEffect(() => {
+    if (!open || !anchorRef.current || !menuRef.current) {
+      return;
+    }
+    const menu = menuRef.current;
+    const anchorRect = anchorRef.current.getBoundingClientRect();
+    if (width === "anchor") {
+      menu.style.width = `${anchorRect.width}px`;
+      menu.style.minWidth = `${anchorRect.width}px`;
+    } else if (width === "min-anchor") {
+      menu.style.minWidth = `${anchorRect.width}px`;
+    }
+    menu.showPopover();
+    const menuRect = menu.getBoundingClientRect();
+    const rightToLeft = getComputedStyle(anchorRef.current).direction === "rtl";
+    const alignRightEdge = alignEnd !== rightToLeft;
+    let left = alignRightEdge ? anchorRect.right - menuRect.width : anchorRect.left;
+    left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
+    let top = anchorRect.bottom + 6;
+    if (top + menuRect.height > window.innerHeight - 8 && anchorRect.top - menuRect.height - 6 >= 8) {
+      top = anchorRect.top - menuRect.height - 6;
+    }
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    const onScroll = (event: Event) => {
+      if (!(event.target instanceof Node) || !menu.contains(event.target)) {
+        dismissRef.current();
+      }
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [open, anchorRef, menuRef, alignEnd, width, dismissRef]);
+}
+
+export function OthersMenu(props: {
+  children: ReactNode;
+  icon?: IconName;
+  title?: string;
+  className?: string;
+}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => setOpen(false));
+  useMenuPopover(ref, menuRef, open, () => setOpen(false), { alignEnd: true });
 
   return (
     <div className={cx("menu-anchor", props.className)} ref={ref}>
-      <IconButton active={open} title={t("Others")} onClick={() => setOpen(!open)}>
+      <IconButton active={open} title={props.title ?? t("Others")} onClick={() => setOpen(!open)}>
         <Icon name={props.icon ?? "more_vert"} />
       </IconButton>
       {open && (
-        <div className="menu align-right" onClick={() => setOpen(false)}>
+        <div
+          ref={menuRef}
+          popover="manual"
+          className="menu popover-menu"
+          role="menu"
+          onClick={() => setOpen(false)}
+          onKeyUp={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              setOpen(false);
+            }
+          }}
+        >
           <SubMenuGroup>{props.children}</SubMenuGroup>
         </div>
       )}
@@ -527,8 +651,9 @@ const SubMenuGroupContext = createContext<{
 
 function SubMenuGroup(props: { children: ReactNode }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const value = useMemo(() => ({ openId, setOpenId }), [openId]);
   return (
-    <SubMenuGroupContext.Provider value={{ openId, setOpenId }}>
+    <SubMenuGroupContext.Provider value={value}>
       {props.children}
     </SubMenuGroupContext.Provider>
   );
@@ -545,7 +670,7 @@ export function SubMenu(props: { label: ReactNode; icon?: IconName; children: Re
   const open = group ? group.openId === id : localOpen;
   const setOpen = (next: boolean) => {
     if (!group) {
-      setLocalOpen(next);
+      setLocalOpen(() => next);
     } else if (next) {
       group.setOpenId(id);
     } else if (group.openId === id) {
@@ -567,6 +692,7 @@ export function SubMenu(props: { label: ReactNode; icon?: IconName; children: Re
       }}
     >
       <button
+        type="button"
         className="menu-item"
         onClick={(event) => {
           event.stopPropagation();
@@ -593,6 +719,7 @@ export function MenuItem(props: {
 }) {
   return (
     <button
+      type="button"
       className={props.danger ? "menu-item danger" : "menu-item"}
       onClick={props.onSelect}
     >
@@ -605,26 +732,43 @@ export function MenuItem(props: {
   );
 }
 
+export function Switch(props: { value: boolean; onChange: (value: boolean) => void; disabled?: boolean; label?: string }) {
+  return (
+    <button
+      type="button"
+      className={props.value ? "switch on" : "switch"}
+      role="switch"
+      aria-checked={props.value}
+      aria-label={props.label}
+      disabled={props.disabled}
+      onClick={() => props.onChange(!props.value)}
+    />
+  );
+}
+
 export function Toggle(props: { label: ReactNode; value: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
   return (
     <div className="toggle-line">
       <span>{props.label}</span>
-      <button
-        className={props.value ? "switch on" : "switch"}
-        role="switch"
-        aria-checked={props.value}
+      <Switch
+        label={typeof props.label === "string" ? props.label : undefined}
+        value={props.value}
+        onChange={props.onChange}
         disabled={props.disabled}
-        onClick={() => props.onChange(!props.value)}
       />
     </div>
   );
 }
 
-export function Field(props: { label: ReactNode; children: ReactNode }) {
+export function Field(props: { label: ReactNode; children: ReactElement<{ id?: string }> }) {
+  const generatedId = useId();
+  const controlId = props.children.props.id ?? generatedId;
   return (
     <div className="field">
-      <label>{props.label}</label>
-      {props.children}
+      <label className="field-label" htmlFor={controlId}>
+        {props.label}
+      </label>
+      {cloneElement(props.children, { id: controlId })}
     </div>
   );
 }
@@ -640,6 +784,38 @@ export function SearchInput(props: { value: string; onChange: (value: string) =>
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
       />
+    </div>
+  );
+}
+
+export function SecretInput(props: {
+  id?: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const { t } = useI18n();
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="secret-input">
+      <input
+        id={props.id}
+        className="input"
+        type={visible ? "text" : "password"}
+        autoComplete="new-password"
+        value={props.value}
+        placeholder={props.placeholder}
+        disabled={props.disabled}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+      <IconButton
+        title={visible ? t("Hide secret") : t("Show secret")}
+        disabled={props.disabled}
+        onClick={() => setVisible(!visible)}
+      >
+        <Icon name={visible ? "visibility_off" : "visibility"} size={14} />
+      </IconButton>
     </div>
   );
 }
@@ -707,7 +883,20 @@ export function QRCode(props: { value: string }) {
   );
 }
 
-function useShowModal(focusSelf = false) {
+let openDialogCount = 0;
+let openDrawerCount = 0;
+
+function syncScrimAttribute() {
+  if (openDialogCount > 0) {
+    document.documentElement.dataset.scrim = "";
+  } else if (openDrawerCount > 0) {
+    document.documentElement.dataset.scrim = "drawer";
+  } else {
+    delete document.documentElement.dataset.scrim;
+  }
+}
+
+function useShowModal(kind: "dialog" | "drawer", focusSelf = false) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
@@ -715,20 +904,32 @@ function useShowModal(focusSelf = false) {
       return;
     }
     dialog.showModal();
+    if (kind === "drawer") {
+      openDrawerCount += 1;
+    } else {
+      openDialogCount += 1;
+    }
+    syncScrimAttribute();
     if (focusSelf) {
-      // showModal() moves focus to the first focusable control, leaving it
-      // visibly highlighted. Focus the dialog itself instead so nothing starts
-      // out selected. (Dialogs that want an initial focus use autoFocus.)
       dialog.focus();
     }
-    return () => dialog.close();
-  }, [focusSelf]);
+    return () => {
+      dialog.close();
+      if (kind === "drawer") {
+        openDrawerCount -= 1;
+      } else {
+        openDialogCount -= 1;
+      }
+      syncScrimAttribute();
+    };
+  }, [kind, focusSelf]);
   return ref;
 }
 
-// A click on the ::backdrop has the dialog element as its target, at
-// coordinates outside the dialog's box; clicks on its own padding target it too.
-function closeOnBackdropClick(event: React.MouseEvent<HTMLDialogElement>, onClose: () => void) {
+function closeOnBackdropPointerDown(
+  event: React.PointerEvent<HTMLDialogElement>,
+  onClose: () => void,
+) {
   if (event.target !== event.currentTarget) {
     return;
   }
@@ -743,35 +944,61 @@ function closeOnBackdropClick(event: React.MouseEvent<HTMLDialogElement>, onClos
   }
 }
 
-export function Drawer(props: { onClose: () => void; children: ReactNode }) {
-  const ref = useShowModal(true);
+function Drawer(props: { onClose: () => void; ariaLabel: string; children: ReactNode }) {
+  const ref = useShowModal("drawer", true);
   return (
     <dialog
       ref={ref}
       className="drawer"
+      aria-label={props.ariaLabel}
       tabIndex={-1}
       onCancel={(event) => {
         event.preventDefault();
         props.onClose();
       }}
-      onClick={(event) => closeOnBackdropClick(event, props.onClose)}
+      onPointerDown={(event) => closeOnBackdropPointerDown(event, props.onClose)}
     >
       {props.children}
     </dialog>
   );
 }
 
+function reactNodeText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(reactNodeText).join("").trim();
+  }
+  return isValidElement<{ children?: ReactNode }>(node) ? reactNodeText(node.props.children) : "";
+}
+
 export function Dialog(props: { onClose: () => void; className?: string; children: ReactNode }) {
-  const ref = useShowModal();
+  const ref = useShowModal("dialog");
+  let accessibleName = "Dialog";
+  for (const child of Children.toArray(props.children)) {
+    if (
+      isValidElement<{ children?: ReactNode }>(child) &&
+      typeof child.type === "string" &&
+      /^h[1-6]$/.test(child.type)
+    ) {
+      const label = reactNodeText(child.props.children);
+      if (label !== "") {
+        accessibleName = label;
+        break;
+      }
+    }
+  }
   return (
     <dialog
       ref={ref}
       className={props.className ? `dialog ${props.className}` : "dialog"}
+      aria-label={accessibleName}
       onCancel={(event) => {
         event.preventDefault();
         props.onClose();
       }}
-      onClick={(event) => closeOnBackdropClick(event, props.onClose)}
+      onPointerDown={(event) => closeOnBackdropPointerDown(event, props.onClose)}
     >
       {props.children}
     </dialog>
@@ -791,7 +1018,7 @@ export function DetailShell(props: {
     return (
       <div className="page">
         <div className="page-header">
-          <button className="back-button" aria-label={props.backLabel} onClick={props.onClose}>
+          <button type="button" className="back-button" aria-label={props.backLabel} onClick={props.onClose}>
             <Icon name="arrow_back" size={20} />
           </button>
           <h1 className="page-title">{props.title}</h1>
@@ -803,7 +1030,10 @@ export function DetailShell(props: {
     );
   }
   return (
-    <Drawer onClose={props.onClose}>
+    <Drawer
+      onClose={props.onClose}
+      ariaLabel={typeof props.title === "string" ? props.title : props.backLabel}
+    >
       <h3>
         {props.title}
         {props.accessory && <span style={{ marginInlineStart: "auto" }}>{props.accessory}</span>}

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   formatBitrate,
@@ -11,15 +11,33 @@ import {
 import { useStream } from "../api/stream";
 import { useSupportsCapability } from "../app/capabilities";
 import { navigate, useApi } from "../app/context";
+import { useLocalDesktopHost } from "../app/desktop";
 import { useStreamingAction } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
-import { Badge, Button, Card, DataLine, Dialog, Field, NavRow, Select, Spinner, Toggle } from "../components/ui";
+import { PageHeader } from "../components/PageHeader";
+import {
+  Badge,
+  Button,
+  Card,
+  DataLine,
+  Dialog,
+  Field,
+  MenuItem,
+  MenuLabel,
+  NavRow,
+  Select,
+  Spinner,
+  Toggle,
+} from "../components/ui";
 import {
   ServiceStatus_Type,
   type NetworkQualityTestProgress,
   type STUNTestProgress,
+  type TailscaleEndpointStatus,
 } from "../gen/daemon/started_service_pb";
+import { allPeers, peerDisplayName, peerSSHAvailable } from "../lib/tailscaleSSH";
+import { useTailscaleSSH } from "./TailscaleSSHConnect";
 
 const NETWORK_QUALITY_DEFAULT_URL = "https://mensura.cdn-apple.com/api/v1/gm/config";
 const STUN_DEFAULT_SERVER = "stun.voipgate.com:3478";
@@ -32,11 +50,9 @@ export function ToolsView() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1 className="page-title">{t("Tools")}</h1>
-      </div>
+      <PageHeader title={t("Tools")} />
       <div className="settings-stack">
-        {started && <TailscaleEndpointRows />}
+        {started && <EndpointRows />}
         {started && <UsbipServerRows />}
         <div>
           <div className="list-section-title">{t("Network")}</div>
@@ -49,37 +65,185 @@ export function ToolsView() {
             <NavRow icon="swap_horiz" title={t("STUN Test")} onClick={() => navigate("tools/stun")} />
           </div>
         </div>
+        <DebugRows />
       </div>
     </div>
   );
 }
 
-function TailscaleEndpointRows() {
+function DebugRows() {
+  const host = useLocalDesktopHost();
+  const { t } = useI18n();
+  const [crashUnreadCount, setCrashUnreadCount] = useState(0);
+  const [oomUnreadCount, setOOMUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (host === null) {
+      return;
+    }
+    let stale = false;
+    host.reports.crash
+      .list()
+      .then((reports) => {
+        if (!stale) {
+          setCrashUnreadCount(reports.filter((report) => !report.isRead).length);
+        }
+      })
+      .catch(() => {});
+    host.reports.oom
+      .list()
+      .then((reports) => {
+        if (!stale) {
+          setOOMUnreadCount(reports.filter((report) => !report.isRead).length);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [host]);
+
+  if (host === null) {
+    return null;
+  }
+  return (
+    <div>
+      <div className="list-section-title">{t("Debug")}</div>
+      <div className="nav-list">
+        <NavRow
+          icon="bug_report"
+          title={t("Crash Report")}
+          detail={crashUnreadCount > 0 ? crashUnreadCount : undefined}
+          onClick={() => navigate("tools/crash-reports")}
+        />
+        <NavRow
+          icon="memory"
+          title={t("OOM Report")}
+          detail={oomUnreadCount > 0 ? oomUnreadCount : undefined}
+          onClick={() => navigate("tools/oom-reports")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function EndpointRows() {
   const api = useApi();
   const { t } = useI18n();
   const tailscale = useStream(api.tailscale);
-  const endpoints = tailscale.data.endpoints;
-  if (!tailscale.data.loaded || endpoints.length === 0) {
+  const supportsVPN = useSupportsCapability("openVpnAndOpenConnect");
+  const endpoints = tailscale.data.loaded ? tailscale.data.endpoints : [];
+  const tailscaleRows = endpoints.map((endpoint) => (
+    <TailscaleEndpointRow
+      key={`tailscale/${endpoint.endpointTag}`}
+      endpoint={endpoint}
+      title={
+        endpoints.length > 1 && endpoint.endpointTag !== ""
+          ? t("Tailscale: {tag}", { tag: endpoint.endpointTag })
+          : "Tailscale"
+      }
+    />
+  ));
+  if (!supportsVPN) {
+    return <EndpointsSection rows={tailscaleRows} />;
+  }
+  return <OpenVPNAndOpenConnectEndpointRows tailscaleRows={tailscaleRows} />;
+}
+
+function OpenVPNAndOpenConnectEndpointRows(props: { tailscaleRows: ReactNode[] }) {
+  const api = useApi();
+  const openConnect = useStream(api.openConnect);
+  const openVPN = useStream(api.openVPN);
+  const rows = [
+    ...props.tailscaleRows,
+    ...openConnect.data.endpoints.map((endpoint) => (
+      <OpenConnectEndpointRow
+        key={`openconnect/${endpoint.endpointTag}`}
+        tag={endpoint.endpointTag}
+        showTag={openConnect.data.endpoints.length > 1}
+      />
+    )),
+    ...openVPN.data.endpoints.map((endpoint) => (
+      <OpenVPNEndpointRow
+        key={`openvpn/${endpoint.endpointTag}`}
+        tag={endpoint.endpointTag}
+        showTag={openVPN.data.endpoints.length > 1}
+      />
+    )),
+  ];
+  return <EndpointsSection rows={rows} />;
+}
+
+function EndpointsSection(props: { rows: ReactNode[] }) {
+  const { t } = useI18n();
+  if (props.rows.length === 0) {
     return null;
   }
   return (
     <div>
       <div className="list-section-title">{t("Endpoints")}</div>
-      <div className="nav-list">
-        {endpoints.map((endpoint) => (
-          <NavRow
-            key={endpoint.endpointTag}
-            icon="hub"
-            title={
-              endpoints.length > 1 && endpoint.endpointTag !== ""
-                ? t("Tailscale: {tag}", { tag: endpoint.endpointTag })
-                : "Tailscale"
-            }
-            onClick={() => navigate(`tools/tailscale/${encodeURIComponent(endpoint.endpointTag)}`)}
-          />
-        ))}
-      </div>
+      <div className="nav-list">{props.rows}</div>
     </div>
+  );
+}
+
+function OpenConnectEndpointRow(props: { tag: string; showTag: boolean }) {
+  return (
+    <NavRow
+      icon="route"
+      title={props.showTag && props.tag !== "" ? `OpenConnect: ${props.tag}` : "OpenConnect"}
+      onClick={() => navigate(`tools/openconnect/${encodeURIComponent(props.tag)}`)}
+    />
+  );
+}
+
+function OpenVPNEndpointRow(props: { tag: string; showTag: boolean }) {
+  return (
+    <NavRow
+      icon="route"
+      title={props.showTag && props.tag !== "" ? `OpenVPN: ${props.tag}` : "OpenVPN"}
+      onClick={() => navigate(`tools/openvpn/${encodeURIComponent(props.tag)}`)}
+    />
+  );
+}
+
+function TailscaleEndpointRow(props: { endpoint: TailscaleEndpointStatus; title: string }) {
+  const { t } = useI18n();
+  const ssh = useTailscaleSSH(props.endpoint.endpointTag);
+  const sshPeers = allPeers(props.endpoint).filter(peerSSHAvailable);
+
+  let connectMenu: ReactNode;
+  if (sshPeers.length === 1) {
+    connectMenu = (
+      <MenuItem icon="terminal" onSelect={() => ssh.connect(sshPeers[0])}>
+        {t("Connect via SSH")}
+      </MenuItem>
+    );
+  } else if (sshPeers.length > 1) {
+    connectMenu = (
+      <>
+        <MenuLabel>{t("Connect via SSH")}</MenuLabel>
+        {sshPeers.map((peer) => (
+          <MenuItem key={peer.stableID} onSelect={() => ssh.connect(peer)}>
+            {peerDisplayName(peer)}
+          </MenuItem>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <NavRow
+        icon="hub"
+        title={props.title}
+        onClick={() =>
+          navigate(`tools/tailscale/${encodeURIComponent(props.endpoint.endpointTag)}`)
+        }
+        contextMenu={connectMenu}
+      />
+      {ssh.element}
+    </>
   );
 }
 
@@ -116,13 +280,11 @@ function UsbipServerRows() {
 export function ToolsPageHeader(props: { title: string; actions?: ReactNode }) {
   const { t } = useI18n();
   return (
-    <div className="page-header">
-      <button className="back-button" aria-label={t("Tools")} onClick={() => navigate("tools")}>
-        <Icon name="arrow_back" size={20} />
-      </button>
-      <h1 className="page-title">{props.title}</h1>
-      {props.actions && <div className="actions">{props.actions}</div>}
-    </div>
+    <PageHeader
+      title={props.title}
+      actions={props.actions}
+      back={{ label: t("Tools"), onClick: () => navigate("tools") }}
+    />
   );
 }
 
@@ -149,20 +311,22 @@ function OutboundPicker(props: { value: string; onChange: (value: string) => voi
   };
 
   return (
-    <Field label={t("Outbound")}>
-      <button
-        type="button"
-        className="select"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        disabled={props.disabled}
-        onClick={() => {
-          setSearch("");
-          setOpen(true);
-        }}
-      >
-        <span className="select-value">{props.value === "" ? t("Default") : props.value}</span>
-      </button>
+    <>
+      <Field label={t("Outbound")}>
+        <button
+          type="button"
+          className="select"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          disabled={props.disabled}
+          onClick={() => {
+            setSearch("");
+            setOpen(true);
+          }}
+        >
+          <span className="select-value">{props.value === "" ? t("Default") : props.value}</span>
+        </button>
+      </Field>
       {open && (
         <Dialog onClose={() => setOpen(false)}>
           <h3>{t("Outbound")}</h3>
@@ -171,10 +335,9 @@ function OutboundPicker(props: { value: string; onChange: (value: string) => voi
               className="input"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              autoFocus
             />
           </Field>
-          <button className="peer-row" onClick={() => select("")}>
+          <button type="button" className="peer-row" onClick={() => select("")}>
             <span className="peer-name">{t("Default")}</span>
             {props.value === "" && (
               <span className="badges">
@@ -183,7 +346,7 @@ function OutboundPicker(props: { value: string; onChange: (value: string) => voi
             )}
           </button>
           {filtered.map((outbound) => (
-            <button className="peer-row" key={outbound.tag} onClick={() => select(outbound.tag)}>
+            <button type="button" className="peer-row" key={outbound.tag} onClick={() => select(outbound.tag)}>
               <span className="peer-name">{outbound.tag}</span>
               <span className="peer-address">
                 {proxyDisplayType(outbound.type)}
@@ -198,7 +361,7 @@ function OutboundPicker(props: { value: string; onChange: (value: string) => voi
           ))}
         </Dialog>
       )}
-    </Field>
+    </>
   );
 }
 
@@ -217,6 +380,10 @@ function AccuracyBadge(props: { accuracy: number }) {
 export function NetworkQualityView() {
   const api = useApi();
   const { t } = useI18n();
+  const host = useLocalDesktopHost();
+  const serviceStatus = useStream(api.serviceStatus);
+  const started = serviceStatus.data.status?.status === ServiceStatus_Type.STARTED;
+  const standalone = host !== null && !started;
   const [configURL, setConfigURL] = useState(NETWORK_QUALITY_DEFAULT_URL);
   const [outboundTag, setOutboundTag] = useState("");
   const [serial, setSerial] = useState(false);
@@ -225,19 +392,32 @@ export function NetworkQualityView() {
   const [progress, setProgress] = useState<NetworkQualityTestProgress | null>(null);
   const { running, error, reportError, start: startAction, stop } = useStreamingAction();
 
+  useEffect(() => {
+    if (standalone) {
+      setOutboundTag("");
+    }
+  }, [standalone]);
+
   const start = () =>
     startAction(async (signal) => {
       setProgress(null);
-      for await (const update of api.client.startNetworkQualityTest(
-        {
-          configURL,
-          outboundTag,
-          serial,
-          http3,
-          maxRuntimeSeconds: maxRuntime,
-        },
-        { signal },
-      )) {
+      const updates =
+        host !== null && !started
+          ? host.tools.startStandaloneNetworkQualityTest(
+              { configURL, serial, http3, maxRuntimeSeconds: maxRuntime },
+              { signal },
+            )
+          : api.client.startNetworkQualityTest(
+              {
+                configURL,
+                outboundTag,
+                serial,
+                http3,
+                maxRuntimeSeconds: maxRuntime,
+              },
+              { signal },
+            );
+      for await (const update of updates) {
         setProgress(update);
         if (update.error !== "") {
           reportError(update.error);
@@ -261,7 +441,9 @@ export function NetworkQualityView() {
               disabled={running}
             />
           </Field>
-          <OutboundPicker value={outboundTag} onChange={setOutboundTag} disabled={running} />
+          {!standalone && (
+            <OutboundPicker value={outboundTag} onChange={setOutboundTag} disabled={running} />
+          )}
           <Field label={t("Max runtime")}>
             <Select
               options={[20, 30, 60].map((count) => ({
@@ -374,15 +556,29 @@ function ResultValue(props: { pending: boolean; value: string; badge: React.Reac
 export function STUNTestView() {
   const api = useApi();
   const { t } = useI18n();
+  const host = useLocalDesktopHost();
+  const serviceStatus = useStream(api.serviceStatus);
+  const started = serviceStatus.data.status?.status === ServiceStatus_Type.STARTED;
+  const standalone = host !== null && !started;
   const [server, setServer] = useState(STUN_DEFAULT_SERVER);
   const [outboundTag, setOutboundTag] = useState("");
   const [progress, setProgress] = useState<STUNTestProgress | null>(null);
   const { running, error, reportError, start: startAction, stop } = useStreamingAction();
 
+  useEffect(() => {
+    if (standalone) {
+      setOutboundTag("");
+    }
+  }, [standalone]);
+
   const start = () =>
     startAction(async (signal) => {
       setProgress(null);
-      for await (const update of api.client.startSTUNTest({ server, outboundTag }, { signal })) {
+      const updates =
+        host !== null && !started
+          ? host.tools.startStandaloneSTUNTest({ server }, { signal })
+          : api.client.startSTUNTest({ server, outboundTag }, { signal });
+      for await (const update of updates) {
         setProgress(update);
         if (update.error !== "") {
           reportError(update.error);
@@ -403,7 +599,9 @@ export function STUNTestView() {
               disabled={running}
             />
           </Field>
-          <OutboundPicker value={outboundTag} onChange={setOutboundTag} disabled={running} />
+          {!standalone && (
+            <OutboundPicker value={outboundTag} onChange={setOutboundTag} disabled={running} />
+          )}
           <div className="row-actions" style={{ marginTop: 10 }}>
             {running ? (
               <Button variant="danger" onClick={stop}>

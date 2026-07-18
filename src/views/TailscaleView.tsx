@@ -2,11 +2,11 @@ import { useState } from "react";
 
 import { formatRelativeTime, isHttpUrl, type DelayTone } from "../api/format";
 import { useStream } from "../api/stream";
-import { navigate, useApi, useIsMobile, useNow } from "../app/context";
+import { useApi, useIsMobile, useNow } from "../app/context";
 import { showError } from "../app/errorStore";
 import { useStreamingAction } from "../app/hooks";
 import { useI18n } from "../app/i18n";
-import { Icon, type IconName } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { StreamStates } from "../components/StreamBanner";
 import {
   Badge,
@@ -20,31 +20,22 @@ import {
   Field,
   IconButton,
   MenuItem,
+  NavLine,
+  NavLines,
   OthersMenu,
   QRCode,
   Sparkline,
   StateDot,
-  Toggle,
 } from "../components/ui";
 import type {
   TailscaleEndpointStatus,
   TailscalePeer,
   TailscalePingResponse,
 } from "../gen/daemon/started_service_pb";
-import {
-  allPeers,
-  buildSSHSession,
-  loadSSHPrefs,
-  peerDisplayName,
-  saveSSHPrefs,
-  SSH_DEFAULT_TERMINAL_TYPE,
-  SSH_DEFAULT_USERNAME,
-  type SSHSessionOptions,
-} from "../lib/tailscaleSSH";
-import { TerminalOverlay } from "./TerminalView";
+import { allPeers, loadSSHPrefs, peerDisplayName } from "../lib/tailscaleSSH";
+import { useTailscaleSSH } from "./TailscaleSSHConnect";
 import { ToolsPageHeader } from "./ToolsView";
 import styles from "./TailscaleView.module.css";
-import { cx } from "../lib/cx";
 
 export function TailscaleEndpointView(props: { tag: string }) {
   const api = useApi();
@@ -52,10 +43,9 @@ export function TailscaleEndpointView(props: { tag: string }) {
   const tailscale = useStream(api.tailscale);
   const isMobile = useIsMobile();
   const [peerDetail, setPeerDetail] = useState<string | null>(null);
-  const [sshPromptPeer, setSSHPromptPeer] = useState<TailscalePeer | null>(null);
-  const [mobileSSH, setMobileSSH] = useState<SSHSessionOptions | null>(null);
   const [exitPickerOpen, setExitPickerOpen] = useState(false);
   const [authQROpen, setAuthQROpen] = useState(false);
+  const ssh = useTailscaleSSH(props.tag);
 
   const endpoint = tailscale.data.endpoints.find((entry) => entry.endpointTag === props.tag);
   const peers = allPeers(endpoint);
@@ -65,30 +55,6 @@ export function TailscaleEndpointView(props: { tag: string }) {
     peerDetail === "self"
       ? endpoint?.self
       : peers.find((peer) => peer.stableID === peerDetail);
-
-  const openSSHSession = (peer: TailscalePeer, username: string, terminalType: string) => {
-    if (isMobile) {
-      setMobileSSH(buildSSHSession(props.tag, peer, username, terminalType));
-      return;
-    }
-    const path =
-      `tools/tailscale/${encodeURIComponent(props.tag)}/ssh/${encodeURIComponent(peer.stableID)}` +
-      `?username=${encodeURIComponent(username)}&terminalType=${encodeURIComponent(terminalType)}`;
-    const url = new URL(location.href);
-    url.hash = `#/${path}`;
-    if (!window.open(url.toString(), "_blank", "width=960,height=640")) {
-      navigate(path);
-    }
-  };
-
-  const connectSSH = (peer: TailscalePeer) => {
-    const prefs = loadSSHPrefs()[peer.stableID];
-    if (prefs?.remember) {
-      openSSHSession(peer, prefs.username, prefs.terminalType);
-    } else {
-      setSSHPromptPeer(peer);
-    }
-  };
 
   const dialogs = (
     <>
@@ -106,25 +72,7 @@ export function TailscaleEndpointView(props: { tag: string }) {
           <CopyValue value={endpoint.authURL} className={styles.qrCopy} />
         </Dialog>
       )}
-      {sshPromptPeer && (
-        <SSHPrompt
-          key={sshPromptPeer.stableID}
-          peer={sshPromptPeer}
-          onCancel={() => setSSHPromptPeer(null)}
-          onConnect={(username, terminalType, remember) => {
-            saveSSHPrefs(sshPromptPeer.stableID, { username, terminalType, remember });
-            setSSHPromptPeer(null);
-            openSSHSession(sshPromptPeer, username, terminalType);
-          }}
-        />
-      )}
-      {mobileSSH && (
-        <TerminalOverlay
-          tag={props.tag}
-          initialSession={mobileSSH}
-          onClose={() => setMobileSSH(null)}
-        />
-      )}
+      {ssh.element}
     </>
   );
 
@@ -144,8 +92,8 @@ export function TailscaleEndpointView(props: { tag: string }) {
         peer={detailPeer}
         isSelf={peerDetail === "self"}
         onClose={() => setPeerDetail(null)}
-        onConnectSSH={() => connectSSH(detailPeer)}
-        onEditSSH={() => setSSHPromptPeer(detailPeer)}
+        onConnectSSH={() => ssh.connect(detailPeer)}
+        onEditSSH={() => ssh.prompt(detailPeer)}
       />
     </DetailShell>
   );
@@ -188,7 +136,7 @@ export function TailscaleEndpointView(props: { tag: string }) {
             <PeerSections
               endpoint={endpoint}
               onShowPeer={setPeerDetail}
-              onConnectSSH={connectSSH}
+              onConnectSSH={ssh.connect}
             />
           )}
         </div>
@@ -199,19 +147,12 @@ export function TailscaleEndpointView(props: { tag: string }) {
   );
 }
 
-function backendStateTone(state: string): DelayTone {
-  switch (state) {
-    case "Running":
-      return "good";
-    case "NeedsLogin":
-    case "NeedsMachineAuth":
-      return "bad";
-    case "Starting":
-      return "medium";
-    default:
-      return "neutral";
-  }
-}
+const BACKEND_STATE_TONES: Record<string, DelayTone> = {
+  Running: "good",
+  NeedsLogin: "bad",
+  NeedsMachineAuth: "bad",
+  Starting: "medium",
+};
 
 function StatusCard(props: {
   endpoint: TailscaleEndpointStatus;
@@ -228,20 +169,23 @@ function StatusCard(props: {
     <div>
       <div className="list-section-title">{t("Status")}</div>
       <Card>
-        <div className={styles.navLines}>
-          <div className={cx(styles.navLine, styles.static)}>
-            <Icon name="power_settings_new" size={15} />
-            <span className={styles.navLineLabel}>{t("State")}</span>
-            <span className={styles.navLineValue}>
-              <StateDot tone={backendStateTone(endpoint.backendState)} />
-              {endpoint.backendState || t("Unknown")}
-            </span>
-          </div>
+        <NavLines>
+          <NavLine
+            icon="power_settings_new"
+            label={t("State")}
+            value={
+              <>
+                <StateDot tone={BACKEND_STATE_TONES[endpoint.backendState] ?? "neutral"} />
+                {endpoint.stateText}
+              </>
+            }
+          />
           {running && endpoint.self && (
             <NavLine
               icon="computer"
               label={t("This device")}
               value={peerDisplayName(endpoint.self)}
+              chevron
               onClick={props.onShowSelf}
             />
           )}
@@ -250,49 +194,25 @@ function StatusCard(props: {
               icon="router"
               label={t("Exit node")}
               value={endpoint.exitNode ? peerDisplayName(endpoint.exitNode) : t("Disabled")}
+              chevron
               onClick={props.onOpenExitPicker}
             />
           )}
           {endpoint.authURL !== "" && (
             <>
               {isHttpUrl(endpoint.authURL) && (
-                <a className={styles.navLine} href={endpoint.authURL} target="_blank" rel="noreferrer">
-                  <Icon name="open_in_new" size={15} />
-                  <span className={styles.navLineLabel}>{t("Open auth URL")}</span>
-                </a>
+                <NavLine icon="open_in_new" label={t("Open auth URL")} href={endpoint.authURL} />
               )}
-              <button className={styles.navLine} onClick={props.onOpenAuthQR}>
-                <Icon name="qr_code" size={15} />
-                <span className={styles.navLineLabel}>{t("Show auth URL QR code")}</span>
-              </button>
+              <NavLine
+                icon="qr_code"
+                label={t("Show auth URL QR code")}
+                onClick={props.onOpenAuthQR}
+              />
             </>
           )}
-        </div>
+        </NavLines>
       </Card>
     </div>
-  );
-}
-
-function NavLine(props: { icon: IconName; label: string; value: string; onClick: () => void }) {
-  return (
-    <button className={styles.navLine} onClick={props.onClick}>
-      <Icon name={props.icon} size={15} />
-      <span className={styles.navLineLabel}>{props.label}</span>
-      <span className={styles.navLineValue}>{props.value}</span>
-      <Icon name="keyboard_arrow_right" size={14} />
-    </button>
-  );
-}
-
-function peerMatches(peer: TailscalePeer, query: string): boolean {
-  if (query === "") {
-    return true;
-  }
-  return (
-    peerDisplayName(peer).toLowerCase().includes(query) ||
-    peer.hostName.toLowerCase().includes(query) ||
-    peer.dnsName.toLowerCase().includes(query) ||
-    peer.tailscaleIPs.some((address) => address.includes(query))
   );
 }
 
@@ -301,9 +221,9 @@ function PeerSections(props: {
   onShowPeer: (id: string) => void;
   onConnectSSH: (peer: TailscalePeer) => void;
 }) {
-  const groups = props.endpoint.userGroups
-    .map((group) => ({ group, peers: group.peers }))
-    .filter((entry) => entry.peers.length > 0);
+  const groups = props.endpoint.userGroups.flatMap((group) =>
+    group.peers.length > 0 ? [{ group, peers: group.peers }] : [],
+  );
 
   return (
     <>
@@ -336,7 +256,7 @@ function PeerRow(props: { peer: TailscalePeer; onOpen: () => void; onConnectSSH?
   const now = useNow(30_000);
   return (
     <div className={styles.peerItem}>
-      <button className={styles.peerItemMain} onClick={props.onOpen}>
+      <button type="button" className={styles.peerItemMain} onClick={props.onOpen}>
         <StateDot tone={peer.online ? "good" : undefined} />
         <span className="peer-name">{peerDisplayName(peer)}</span>
         <span className="peer-address">{peer.tailscaleIPs[0] ?? ""}</span>
@@ -557,8 +477,14 @@ function ExitNodePicker(props: {
     props.onClose();
   };
 
-  const filtered = props.candidates.filter((peer) =>
-    peerMatches(peer, search.trim().toLowerCase()),
+  const query = search.trim().toLowerCase();
+  const filtered = props.candidates.filter(
+    (peer) =>
+      query === "" ||
+      peerDisplayName(peer).toLowerCase().includes(query) ||
+      peer.hostName.toLowerCase().includes(query) ||
+      peer.dnsName.toLowerCase().includes(query) ||
+      peer.tailscaleIPs.some((address) => address.includes(query)),
   );
 
   return (
@@ -569,10 +495,9 @@ function ExitNodePicker(props: {
           className="input"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          autoFocus
         />
       </Field>
-      <button className="peer-row" onClick={() => select("")}>
+      <button type="button" className="peer-row" onClick={() => select("")}>
         <span className="peer-name">{t("Disabled")}</span>
         {current === "" && (
           <span className="badges">
@@ -581,7 +506,7 @@ function ExitNodePicker(props: {
         )}
       </button>
       {filtered.map((peer) => (
-        <button className="peer-row" key={peer.stableID} onClick={() => select(peer.stableID)}>
+        <button type="button" className="peer-row" key={peer.stableID} onClick={() => select(peer.stableID)}>
           <StateDot tone={peer.online ? "good" : undefined} />
           <span className="peer-name">{peerDisplayName(peer)}</span>
           <span className="peer-address">{peer.tailscaleIPs[0] ?? ""}</span>
@@ -592,76 +517,6 @@ function ExitNodePicker(props: {
           )}
         </button>
       ))}
-    </Dialog>
-  );
-}
-
-function SSHPrompt(props: {
-  peer: TailscalePeer;
-  onCancel: () => void;
-  onConnect: (username: string, terminalType: string, remember: boolean) => void;
-}) {
-  const { t } = useI18n();
-  const [initial] = useState(() => loadSSHPrefs()[props.peer.stableID]);
-  const [username, setUsername] = useState(initial?.username ?? SSH_DEFAULT_USERNAME);
-  const [terminalType, setTerminalType] = useState(
-    initial?.terminalType ?? SSH_DEFAULT_TERMINAL_TYPE,
-  );
-  const [remember, setRemember] = useState(initial?.remember ?? false);
-
-  const connect = () => {
-    const trimmed = username.trim();
-    if (trimmed === "") {
-      return;
-    }
-    props.onConnect(trimmed, terminalType.trim() || SSH_DEFAULT_TERMINAL_TYPE, remember);
-  };
-
-  return (
-    <Dialog onClose={props.onCancel}>
-      <h3>{t("SSH Configuration")}</h3>
-      <div className="hint" style={{ marginBottom: 12 }}>{peerDisplayName(props.peer)}</div>
-      <Field label={t("Username")}>
-        <input
-          className="input"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              connect();
-            }
-          }}
-          autoFocus
-        />
-      </Field>
-      <Field label={t("Terminal type")}>
-        <input
-          className="input"
-          value={terminalType}
-          onChange={(event) => setTerminalType(event.target.value)}
-        />
-      </Field>
-      <Toggle label={t("Remember SSH options")} value={remember} onChange={setRemember} />
-      <div className="hint" style={{ display: "grid", gap: 6 }}>
-        <div>
-          {t(
-            "If enabled, Connect will open the session directly without asking again. This also applies to the shortcut menu on this peer's entry in the peer list.",
-          )}
-        </div>
-        <div>
-          {t(
-            "This peer will also appear in the New Session menu when connected to other peers via SSH.",
-          )}
-        </div>
-      </div>
-      <div className="row-actions dialog-actions">
-        <Button onClick={props.onCancel}>
-          {t("Cancel")}
-        </Button>
-        <Button variant="primary" disabled={username.trim() === ""} onClick={connect}>
-          {t("Connect")}
-        </Button>
-      </div>
     </Dialog>
   );
 }

@@ -34,25 +34,13 @@ export function isTerminalCode(code: Code | undefined): boolean {
   );
 }
 
-// Notifying useSyncExternalStore synchronously on every message trips React's
-// "Maximum update depth exceeded" under a burst, so the fan-out is coalesced.
-const scheduleFlush: (callback: () => void) => number =
-  typeof requestAnimationFrame === "function"
-    ? (callback) => requestAnimationFrame(callback)
-    : (callback) => setTimeout(callback, 0) as unknown as number;
-
-const cancelFlush: (handle: number) => void =
-  typeof requestAnimationFrame === "function"
-    ? (handle) => cancelAnimationFrame(handle)
-    : (handle) => clearTimeout(handle);
-
 export class StreamStore<T> {
   private listeners = new Set<() => void>();
   private snapshot: StreamSnapshot<T>;
   private controller: AbortController | null = null;
   private skipBackoff = false;
   private wakeBackoff: (() => void) | null = null;
-  private flushHandle: number | null = null;
+  private flushHandle: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private createInitial: () => T,
@@ -82,10 +70,18 @@ export class StreamStore<T> {
     this.wakeBackoff?.();
   };
 
+  reconnectNow = (): void => {
+    if (this.listeners.size === 0) {
+      return;
+    }
+    this.stop();
+    this.start();
+  };
+
   private setSnapshot(next: StreamSnapshot<T>) {
     this.snapshot = next;
     if (this.flushHandle === null) {
-      this.flushHandle = scheduleFlush(() => {
+      this.flushHandle = setTimeout(() => {
         this.flushHandle = null;
         for (const listener of this.listeners) {
           listener();
@@ -105,7 +101,7 @@ export class StreamStore<T> {
     this.controller?.abort();
     this.controller = null;
     if (this.flushHandle !== null) {
-      cancelFlush(this.flushHandle);
+      clearTimeout(this.flushHandle);
       this.flushHandle = null;
     }
   }
@@ -114,7 +110,11 @@ export class StreamStore<T> {
     let attempt = 0;
     while (!signal.aborted) {
       const data = this.resetOnReconnect ? this.createInitial() : this.snapshot.data;
-      this.setSnapshot({ phase: "connecting", data });
+      if (this.snapshot.phase !== "error") {
+        this.setSnapshot({ phase: "connecting", data });
+      } else if (this.resetOnReconnect) {
+        this.setSnapshot({ ...this.snapshot, data });
+      }
       try {
         await this.runStream({
           signal,

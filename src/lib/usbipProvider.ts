@@ -1,12 +1,13 @@
 import { useEffect, useReducer, useRef } from "react";
 
-import type { Server } from "../api/config";
+import type { BidirectionalStream, GrpcStatus } from "../api/bidirectional";
+import type { DaemonApi } from "../api/daemon";
 import { showError } from "../app/errorStore";
 import { useI18n, type Translate } from "../app/i18n";
-import { GrpcWebSocketStream, type GrpcStatus } from "../api/websocket";
+import { useLatestRef } from "../app/useLatest";
 import {
+  StartedService,
   USBProviderMessageSchema,
-  USBServerMessageSchema,
   type USBServerMessage,
   type USBURBRequest,
 } from "../gen/daemon/started_service_pb";
@@ -33,8 +34,6 @@ export interface ProvidedDevice {
 
 const DETACHED_BUS_ID_TTL_MS = 10_000;
 
-// The identity fields used to recognise the "same" physical device across a
-// disconnect/reconnect — WebUSB hands out a fresh USBDevice object each replug.
 type UsbDeviceIdentity = Pick<
   USBDevice,
   "vendorId" | "productId" | "serialNumber" | "manufacturerName" | "productName"
@@ -42,16 +41,6 @@ type UsbDeviceIdentity = Pick<
 
 function deviceLabel(device: USBDevice): string {
   return device.productName || formatVidPid(device.vendorId, device.productId);
-}
-
-function reconnectIntent(device: USBDevice): UsbDeviceIdentity {
-  return {
-    vendorId: device.vendorId,
-    productId: device.productId,
-    serialNumber: device.serialNumber,
-    manufacturerName: device.manufacturerName,
-    productName: device.productName,
-  };
 }
 
 function usbDevicesMatch(a: UsbDeviceIdentity, b: UsbDeviceIdentity): boolean {
@@ -71,7 +60,7 @@ function usbDevicesMatch(a: UsbDeviceIdentity, b: UsbDeviceIdentity): boolean {
 }
 
 export class UsbipProviderSession {
-  private stream: GrpcWebSocketStream<typeof USBProviderMessageSchema, typeof USBServerMessageSchema>;
+  private stream: BidirectionalStream<typeof USBProviderMessageSchema>;
   private nextDeviceId = 1;
   private usbDevices = new Map<string, USBDevice>();
   private reconnectIntents: UsbDeviceIdentity[] = [];
@@ -104,18 +93,13 @@ export class UsbipProviderSession {
   };
 
   constructor(
-    config: Server,
+    api: DaemonApi,
     private serverTag: string,
     private onUpdate: () => void,
     private onError: (error: unknown) => void,
     private translate: Translate,
   ) {
-    this.stream = new GrpcWebSocketStream({
-      config,
-      service: "daemon.StartedService",
-      method: "ProvideUSBDevices",
-      requestSchema: USBProviderMessageSchema,
-      responseSchema: USBServerMessageSchema,
+    this.stream = api.openBidirectionalStream(StartedService.method.provideUSBDevices, {
       onMessage: (message) => this.onMessage(message),
       onEnd: (status, error) => this.onEnd(status, error),
     });
@@ -218,10 +202,22 @@ export class UsbipProviderSession {
       return;
     }
     if (options.rememberReconnect && device) {
-      this.reconnectIntents.push(reconnectIntent(device));
+      this.reconnectIntents.push({
+        vendorId: device.vendorId,
+        productId: device.productId,
+        serialNumber: device.serialNumber,
+        manufacturerName: device.manufacturerName,
+        productName: device.productName,
+      });
     }
-    if (entry?.busId) {
-      this.suppressDetachedBusId(entry.busId);
+    const busId = entry?.busId;
+    if (busId) {
+      this.clearDetachedBusId(busId);
+      const timer = setTimeout(() => {
+        this.detachedBusIdTimers.delete(busId);
+        this.onUpdate();
+      }, DETACHED_BUS_ID_TTL_MS);
+      this.detachedBusIdTimers.set(busId, timer);
     }
     if (options.notifyServer && !this.closed) {
       this.stream.send({ message: { case: "detach", value: { deviceId } } });
@@ -259,15 +255,6 @@ export class UsbipProviderSession {
       matchedDeviceId = deviceId;
     }
     return matchedDeviceId;
-  }
-
-  private suppressDetachedBusId(busId: string): void {
-    this.clearDetachedBusId(busId);
-    const timer = setTimeout(() => {
-      this.detachedBusIdTimers.delete(busId);
-      this.onUpdate();
-    }, DETACHED_BUS_ID_TTL_MS);
-    this.detachedBusIdTimers.set(busId, timer);
   }
 
   private clearDetachedBusId(busId: string): void {
@@ -435,6 +422,7 @@ async function releaseDevice(device: USBDevice): Promise<void> {
 }
 
 export interface PermittedDevice {
+  key: string;
   device: USBDevice;
   label: string;
   vidPid: string;
@@ -454,26 +442,29 @@ export interface UsbipProvider {
   detach: (deviceId: string) => void;
 }
 
-export function useUsbipProvider(config: Server, serverTag: string): UsbipProvider {
+export function useUsbipProvider(api: DaemonApi, serverTag: string): UsbipProvider {
   const status = webusbStatus();
   const { t } = useI18n();
   const sessionRef = useRef<UsbipProviderSession | null>(null);
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
 
-  const translateRef = useRef(t);
-  translateRef.current = t;
+  const translateRef = useLatestRef(t);
 
   useEffect(() => {
     return () => {
       sessionRef.current?.close();
       sessionRef.current = null;
     };
-  }, [config, serverTag]);
+  }, [api, serverTag]);
 
   const ensureSession = (): UsbipProviderSession => {
     if (!sessionRef.current || sessionRef.current.closed) {
-      sessionRef.current = new UsbipProviderSession(config, serverTag, forceUpdate, showError, (key, params) =>
-        translateRef.current(key, params),
+      sessionRef.current = new UsbipProviderSession(
+        api,
+        serverTag,
+        forceUpdate,
+        showError,
+        (key, params) => translateRef.current(key, params),
       );
     }
     return sessionRef.current;
@@ -490,12 +481,24 @@ export function useUsbipProvider(config: Server, serverTag: string): UsbipProvid
       return [];
     }
     const attached = sessionRef.current?.attachedDevices() ?? new Set<USBDevice>();
-    return devices.map((device) => ({
-      device,
-      label: deviceLabel(device),
-      vidPid: formatVidPid(device.vendorId, device.productId),
-      attached: attached.has(device),
-    }));
+    const identityCounts = new Map<string, number>();
+    return devices.map((device) => {
+      const identity = [
+        formatVidPid(device.vendorId, device.productId),
+        device.serialNumber ?? "",
+        device.manufacturerName ?? "",
+        device.productName ?? "",
+      ].join(":");
+      const occurrence = identityCounts.get(identity) ?? 0;
+      identityCounts.set(identity, occurrence + 1);
+      return {
+        key: `${identity}:${occurrence}`,
+        device,
+        label: deviceLabel(device),
+        vidPid: formatVidPid(device.vendorId, device.productId),
+        attached: attached.has(device),
+      };
+    });
   };
 
   const attachPermitted = async (device: USBDevice): Promise<void> => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 
 import type { StreamSnapshot } from "../api/stream";
 import { loadTerminalConfig, TERMINAL_CONFIG_EVENT, type TerminalConfig } from "../lib/tailscaleSSH";
+import { useLatestRef } from "./useLatest";
 
 export const RECONNECT_GRACE_MS = 6500;
 
@@ -29,7 +30,6 @@ export function useStreamOutage(
       lastError.current = error ?? "";
       if (immediate) {
         cancel();
-        setOutage(lastError.current);
       } else if (timer.current === null) {
         timer.current = window.setTimeout(() => {
           timer.current = null;
@@ -46,19 +46,11 @@ export function useStreamOutage(
       }
     };
   }, []);
-  return outage;
+  return phase === "error" && immediate ? (error ?? "") : outage;
 }
 
-// Tracks the on-screen keyboard height via the visual viewport so the terminal
-// symbol bar can sit just above the soft keyboard. Returns 0 when no keyboard
-// is shown, or on platforms without a visualViewport (desktop/old browsers).
-//
-// Height is layout viewport - visual viewport, deliberately WITHOUT offsetTop,
-// and recomputed only on `resize` (keyboard show/hide) — never on `scroll`.
-// The keyboard is anchored to the bottom of the layout viewport, so its height
-// is constant while the page rubber-band scrolls; folding in offsetTop or
-// reacting to scroll would make a `position: fixed` bar drift away from the
-// keyboard and flicker out on scroll-up.
+// Mobile visualViewport height stays fixed while the page rubber-band scrolls;
+// offsetTop changes even though the keyboard remains anchored to the layout viewport.
 export function useKeyboardInset(): number {
   const [inset, setInset] = useState(0);
   useEffect(() => {
@@ -77,9 +69,6 @@ export function useKeyboardInset(): number {
   return inset;
 }
 
-// Reads the terminal config from storage and re-renders when it changes, both
-// within this window (custom event) and in the desktop terminal popup (the
-// native cross-window `storage` event).
 export function useTerminalConfig(): TerminalConfig {
   const [config, setConfig] = useState<TerminalConfig>(loadTerminalConfig);
   useEffect(() => {
@@ -97,8 +86,7 @@ export function useTerminalConfig(): TerminalConfig {
 const escapeStack: (() => void)[] = [];
 
 function useEscapeEntry(active: boolean, onDismiss: () => void) {
-  const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
+  const dismissRef = useLatestRef(onDismiss);
   useEffect(() => {
     if (!active) {
       return;
@@ -119,7 +107,7 @@ function useEscapeEntry(active: boolean, onDismiss: () => void) {
       }
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [active]);
+  }, [active, dismissRef]);
 }
 
 export function useDismiss(
@@ -128,8 +116,7 @@ export function useDismiss(
   onDismiss: () => void,
 ) {
   useEscapeEntry(open, onDismiss);
-  const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
+  const dismissRef = useLatestRef(onDismiss);
   useEffect(() => {
     if (!open) {
       return;
@@ -141,7 +128,7 @@ export function useDismiss(
     };
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [ref, open]);
+  }, [ref, open, dismissRef]);
 }
 
 export function usePendingValue<T>(serverValue: T): [T, (pending: T | null) => void] {
@@ -155,8 +142,7 @@ export function usePendingValue<T>(serverValue: T): [T, (pending: T | null) => v
 // Failures are ignored: daemons predating the method reject with Unimplemented.
 export function useUnaryOnce<T>(call: () => Promise<T>, enabled = true): T | null {
   const [value, setValue] = useState<T | null>(null);
-  const callRef = useRef(call);
-  callRef.current = call;
+  const callRef = useLatestRef(call);
   useEffect(() => {
     if (!enabled || value !== null) {
       return;
@@ -165,7 +151,7 @@ export function useUnaryOnce<T>(call: () => Promise<T>, enabled = true): T | nul
     callRef.current().then(
       (result) => {
         if (!stale) {
-          setValue(result);
+          setValue(() => result);
         }
       },
       () => {},
@@ -173,7 +159,7 @@ export function useUnaryOnce<T>(call: () => Promise<T>, enabled = true): T | nul
     return () => {
       stale = true;
     };
-  }, [enabled, value]);
+  }, [enabled, value, callRef]);
   return value;
 }
 

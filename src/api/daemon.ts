@@ -1,4 +1,5 @@
-import type { Client, Interceptor, Transport } from "@connectrpc/connect";
+import type { DescMessage, DescMethodBiDiStreaming } from "@bufbuild/protobuf";
+import type { Client, Transport } from "@connectrpc/connect";
 import { Code, ConnectError, createClient } from "@connectrpc/connect";
 import { createGrpcWebTransport } from "@connectrpc/connect-web";
 
@@ -15,7 +16,14 @@ import {
   Status,
   TailscaleEndpointStatus,
   USBIPServerStatus,
+  type OpenConnectEndpointStatus,
+  type OpenVPNEndpointStatus,
 } from "../gen/daemon/started_service_pb";
+import {
+  openBidirectionalStream,
+  type BidirectionalStream,
+  type BidirectionalStreamHandlers,
+} from "./bidirectional";
 import { serverConnectUrl, type Server } from "./config";
 import { StreamStore } from "./stream";
 
@@ -84,16 +92,19 @@ export interface UsbipData {
   loaded: boolean;
 }
 
+export interface OpenConnectData {
+  endpoints: OpenConnectEndpointStatus[];
+  loaded: boolean;
+}
+
+export interface OpenVPNData {
+  endpoints: OpenVPNEndpointStatus[];
+  loaded: boolean;
+}
+
 export interface ServerInfo {
   version: string;
   apiVersion: number;
-}
-
-function authInterceptor(secret: string): Interceptor {
-  return (next) => (request) => {
-    request.header.set("Authorization", `Bearer ${secret}`);
-    return next(request);
-  };
 }
 
 const SUBSCRIPTION_INTERVAL = 1_000_000_000n;
@@ -101,6 +112,8 @@ const SUBSCRIPTION_INTERVAL = 1_000_000_000n;
 export class DaemonApi {
   readonly config: Server;
   readonly client: Client<typeof StartedService>;
+  private readonly bidirectionalTransport: Transport | undefined;
+  private readonly language: string;
 
   readonly serviceStatus: StreamStore<ServiceStatusData>;
   readonly status: StreamStore<StatusData>;
@@ -111,21 +124,32 @@ export class DaemonApi {
   readonly outbounds: StreamStore<OutboundsData>;
   readonly tailscale: StreamStore<TailscaleData>;
   readonly usbip: StreamStore<UsbipData>;
+  readonly openConnect: StreamStore<OpenConnectData>;
+  readonly openVPN: StreamStore<OpenVPNData>;
 
   private logSequence = 0;
   private versionCache: ServerInfo | null = null;
 
-  constructor(config: Server, transport?: Transport) {
+  constructor(config: Server, language: string, transport?: Transport) {
     this.config = config;
+    this.language = language;
+    this.bidirectionalTransport = transport ? withLanguageHeader(transport, language) : undefined;
     this.client = createClient(
       StartedService,
-      transport ??
+      this.bidirectionalTransport ??
         createGrpcWebTransport({
           baseUrl: serverConnectUrl(config.url),
-          interceptors: config.secret ? [authInterceptor(config.secret)] : [],
+          interceptors: [
+            (next) => (request) => {
+              request.header.set("Accept-Language", language);
+              if (config.secret) {
+                request.header.set("Authorization", `Bearer ${config.secret}`);
+              }
+              return next(request);
+            },
+          ],
         }),
     );
-
     this.serviceStatus = new StreamStore<ServiceStatusData>(
       () => ({ status: null }),
       async ({ signal, update }) => {
@@ -291,11 +315,52 @@ export class DaemonApi {
     this.usbip = new StreamStore<UsbipData>(
       () => ({ servers: [], loaded: false }),
       async ({ signal, update }) => {
-        await this.requireApiVersion(MIN_API_VERSION.usbip);
+        const { apiVersion } = await this.serverInfo();
+        if (apiVersion < MIN_API_VERSION.usbip) {
+          throw new ConnectError(
+            `requires server API version ${MIN_API_VERSION.usbip}`,
+            Code.Unimplemented,
+          );
+        }
         for await (const message of this.client.subscribeUSBIPServerStatus({}, { signal })) {
           update(() => ({ servers: message.servers, loaded: true }));
         }
       },
+    );
+
+    this.openConnect = new StreamStore<OpenConnectData>(
+      () => ({ endpoints: [], loaded: false }),
+      async ({ signal, update }) => {
+        await this.requireApiVersion(MIN_API_VERSION.openVpnAndOpenConnect);
+        for await (const message of this.client.subscribeOpenConnectStatus({}, { signal })) {
+          update(() => ({ endpoints: message.endpoints, loaded: true }));
+        }
+      },
+      true,
+    );
+
+    this.openVPN = new StreamStore<OpenVPNData>(
+      () => ({ endpoints: [], loaded: false }),
+      async ({ signal, update }) => {
+        await this.requireApiVersion(MIN_API_VERSION.openVpnAndOpenConnect);
+        for await (const message of this.client.subscribeOpenVPNStatus({}, { signal })) {
+          update(() => ({ endpoints: message.endpoints, loaded: true }));
+        }
+      },
+      true,
+    );
+  }
+
+  openBidirectionalStream<I extends DescMessage, O extends DescMessage>(
+    method: DescMethodBiDiStreaming<I, O>,
+    handlers: BidirectionalStreamHandlers<O>,
+  ): BidirectionalStream<I> {
+    return openBidirectionalStream(
+      this.config,
+      this.language,
+      method,
+      handlers,
+      this.bidirectionalTransport,
     );
   }
 
@@ -309,6 +374,20 @@ export class DaemonApi {
     this.outbounds.retryNow();
     this.tailscale.retryNow();
     this.usbip.retryNow();
+    this.openConnect.retryNow();
+    this.openVPN.retryNow();
+  }
+
+  reconnectNow(): void {
+    this.serviceStatus.reconnectNow();
+    this.status.reconnectNow();
+    this.groups.reconnectNow();
+    this.clashMode.reconnectNow();
+    this.logs.reconnectNow();
+    this.connections.reconnectNow();
+    this.outbounds.reconnectNow();
+    this.tailscale.reconnectNow();
+    this.usbip.reconnectNow();
   }
 
   async urlTest(groupTag: string): Promise<void> {
@@ -371,6 +450,20 @@ export class DaemonApi {
   async tailscaleLogout(endpointTag: string): Promise<void> {
     await this.client.tailscaleLogout({ endpointTag });
   }
+}
+
+function withLanguageHeader(transport: Transport, language: string): Transport {
+  const addLanguage = (header: HeadersInit | undefined) => {
+    const result = new Headers(header);
+    result.set("Accept-Language", language);
+    return result;
+  };
+  return {
+    unary: (method, signal, timeoutMs, header, input, contextValues) =>
+      transport.unary(method, signal, timeoutMs, addLanguage(header), input, contextValues),
+    stream: (method, signal, timeoutMs, header, input, contextValues) =>
+      transport.stream(method, signal, timeoutMs, addLanguage(header), input, contextValues),
+  };
 }
 
 function appendHistory(history: number[], value: number): number[] {

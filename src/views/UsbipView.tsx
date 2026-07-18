@@ -44,7 +44,7 @@ export function UsbipView(props: { tag: string }) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const usbip = useStream(api.usbip);
-  const provider = useUsbipProvider(api.config, props.tag);
+  const provider = useUsbipProvider(api, props.tag);
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const [detailKey, setDetailKey] = useState<string | null>(null);
 
@@ -136,31 +136,18 @@ const PROVIDED_STATE: Record<ProvidedDeviceState, { tone: DelayTone; key: Messag
   error: { tone: "bad", key: "Error" },
 };
 
-function serverState(state: USBDeviceState, t: Translate): { label: string; tone: DelayTone } | undefined {
-  switch (state) {
-    case USBDeviceState.USB_DEVICE_STATE_IDLE:
-      return { label: t("Idle"), tone: "good" };
-    case USBDeviceState.USB_DEVICE_STATE_ATTACHED:
-      return { label: t("Attached"), tone: "medium" };
-    case USBDeviceState.USB_DEVICE_STATE_UNAVAILABLE:
-      return { label: t("Unavailable"), tone: "bad" };
-  }
-}
+const SERVER_STATE: Partial<Record<USBDeviceState, { tone: DelayTone; key: MessageKey }>> = {
+  [USBDeviceState.USB_DEVICE_STATE_IDLE]: { tone: "good", key: "Idle" },
+  [USBDeviceState.USB_DEVICE_STATE_ATTACHED]: { tone: "medium", key: "Attached" },
+  [USBDeviceState.USB_DEVICE_STATE_UNAVAILABLE]: { tone: "bad", key: "Unavailable" },
+};
 
-function backendLabel(backend: USBBackend): string | undefined {
-  switch (backend) {
-    case USBBackend.USB_BACKEND_LINUX_SYSFS:
-      return "linux-sysfs";
-    case USBBackend.USB_BACKEND_DYNAMIC:
-      return "dynamic";
-    case USBBackend.USB_BACKEND_DARWIN_IOKIT:
-      return "darwin-iokit";
-    case USBBackend.USB_BACKEND_WINDOWS_VBOXUSB:
-      return "windows-vboxusb";
-    default:
-      return undefined;
-  }
-}
+const BACKEND_LABEL: Partial<Record<USBBackend, string>> = {
+  [USBBackend.USB_BACKEND_LINUX_SYSFS]: "linux-sysfs",
+  [USBBackend.USB_BACKEND_DYNAMIC]: "dynamic",
+  [USBBackend.USB_BACKEND_DARWIN_IOKIT]: "darwin-iokit",
+  [USBBackend.USB_BACKEND_WINDOWS_VBOXUSB]: "windows-vboxusb",
+};
 
 function mergeDeviceRows(server: USBIPServerStatus, provider: UsbipProvider, t: Translate): DeviceRow[] {
   const providedByBusId = new Map<string, ProvidedDevice>();
@@ -182,6 +169,7 @@ function mergeDeviceRows(server: USBIPServerStatus, provider: UsbipProvider, t: 
     if (provided) {
       matched.add(provided.deviceId);
     }
+    const state = SERVER_STATE[device.state];
     rows.push({
       key: device.stableId || device.busId,
       name:
@@ -189,8 +177,8 @@ function mergeDeviceRows(server: USBIPServerStatus, provider: UsbipProvider, t: 
         (descriptor ? formatVidPid(descriptor.vendorId, descriptor.productId) : device.busId),
       vidPid: descriptor ? formatVidPid(descriptor.vendorId, descriptor.productId) : undefined,
       busId: device.busId,
-      backend: backendLabel(device.backend),
-      state: serverState(device.state, t),
+      backend: BACKEND_LABEL[device.backend],
+      state: state && { label: t(state.key), tone: state.tone },
       descriptor,
       onDetach: provided ? () => provider.detach(provided.deviceId) : undefined,
     });
@@ -275,16 +263,6 @@ function AddDeviceMenu({ provider }: { provider: UsbipProvider }) {
     void provider.listPermitted().then(setPermitted, () => setPermitted([]));
   };
 
-  const pick = (entry: PermittedDevice) => {
-    setOpen(false);
-    void provider.attachPermitted(entry.device).catch(showError);
-  };
-
-  const pickOther = () => {
-    setOpen(false);
-    void provider.connectNew().catch(showError);
-  };
-
   return (
     <div className="menu-anchor" ref={ref}>
       <IconButton
@@ -305,13 +283,16 @@ function AddDeviceMenu({ provider }: { provider: UsbipProvider }) {
           ) : (
             <>
               {permitted.length > 0 && <MenuLabel>{t("Authorized devices")}</MenuLabel>}
-              {permitted.map((entry, index) => (
+              {permitted.map((entry) => (
                 <button
-                  key={`${entry.vidPid}-${index}`}
+                  key={entry.key}
                   type="button"
                   className="menu-item"
                   disabled={entry.attached}
-                  onClick={() => pick(entry)}
+                  onClick={() => {
+                    setOpen(false);
+                    void provider.attachPermitted(entry.device).catch(showError);
+                  }}
                 >
                   <span className="menu-check">
                     {entry.attached && <Icon name="check" size={13} />}
@@ -321,7 +302,14 @@ function AddDeviceMenu({ provider }: { provider: UsbipProvider }) {
                 </button>
               ))}
               {permitted.length > 0 && <div className="menu-divider" />}
-              <button type="button" className="menu-item" onClick={pickOther}>
+              <button
+                type="button"
+                className="menu-item"
+                onClick={() => {
+                  setOpen(false);
+                  void provider.connectNew().catch(showError);
+                }}
+              >
                 <span className="menu-check">
                   <Icon name="add" size={13} />
                 </span>
@@ -350,7 +338,7 @@ function DeviceItem({ row, onOpen }: { row: DeviceRow; onOpen: (key: string) => 
   return (
     <div className={styles.usbipItem}>
       {row.descriptor ? (
-        <button className={styles.usbipItemMain} onClick={() => onOpen(row.key)}>
+        <button type="button" className={styles.usbipItemMain} onClick={() => onOpen(row.key)}>
           {body}
         </button>
       ) : (
@@ -378,6 +366,13 @@ function UsbDeviceDetailBody({ row }: { row: DeviceRow }) {
     return null;
   }
   const speed = usbSpeedLabel(descriptor.speed);
+  const interfaceCounts = new Map<string, number>();
+  const interfaces = descriptor.interfaces.map((iface, index) => {
+    const identity = `${iface.interfaceClass}:${iface.interfaceSubClass}:${iface.interfaceProtocol}`;
+    const occurrence = interfaceCounts.get(identity) ?? 0;
+    interfaceCounts.set(identity, occurrence + 1);
+    return { iface, key: `${identity}:${occurrence}`, number: index + 1 };
+  });
   return (
     <>
       <DetailSection title={t("Identity")}>
@@ -420,10 +415,10 @@ function UsbDeviceDetailBody({ row }: { row: DeviceRow }) {
             mono
           />
         )}
-        {descriptor.interfaces.map((iface, index) => (
+        {interfaces.map(({ iface, key, number }) => (
           <DataLine
-            key={index}
-            label={t("Interface {n}", { n: index + 1 })}
+            key={key}
+            label={t("Interface {n}", { n: number })}
             value={usbClassTriplet(iface.interfaceClass, iface.interfaceSubClass, iface.interfaceProtocol)}
             mono
           />

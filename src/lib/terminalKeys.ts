@@ -1,7 +1,4 @@
-// Auxiliary symbol bar for the mobile terminal — key model and ANSI encoding.
-// Pure logic (no React/DOM) so it can be unit-tested. Adapted from the
-// TerminalInputAccessoryView in sing-box-for-apple (Ghostty), dropping the
-// Cmd key which has no terminal meaning in a web xterm session.
+// Key ordering and encoding match sing-box-for-apple's TerminalInputAccessoryView.
 
 const ESC = "\x1b";
 
@@ -23,32 +20,29 @@ export type TerminalKey =
   | { kind: "paste" }
   | { kind: "divider" };
 
-// Three groups separated by dot dividers, mirroring the reference design.
-export const DEFAULT_KEYS: readonly TerminalKey[] = [
-  { kind: "special", id: "esc", label: "esc" },
-  { kind: "special", id: "tab", label: "tab" },
-  { kind: "modifier", mod: "ctrl", label: "⌃" },
-  { kind: "modifier", mod: "alt", label: "⌥" },
-  { kind: "divider" },
-  { kind: "special", id: "left", label: "←" },
-  { kind: "special", id: "up", label: "↑" },
-  { kind: "special", id: "down", label: "↓" },
-  { kind: "special", id: "right", label: "→" },
-  { kind: "divider" },
-  { kind: "text", char: "|" },
-  { kind: "text", char: "/" },
-  { kind: "text", char: "~" },
-  { kind: "text", char: "-" },
-  { kind: "text", char: "_" },
-  { kind: "text", char: "`" },
-  { kind: "text", char: "'" },
-  { kind: "text", char: '"' },
-  { kind: "paste" },
+export const DEFAULT_KEYS: readonly (TerminalKey & { key: string })[] = [
+  { key: "escape", kind: "special", id: "esc", label: "esc" },
+  { key: "tab", kind: "special", id: "tab", label: "tab" },
+  { key: "control", kind: "modifier", mod: "ctrl", label: "⌃" },
+  { key: "option", kind: "modifier", mod: "alt", label: "⌥" },
+  { key: "navigation-divider", kind: "divider" },
+  { key: "left", kind: "special", id: "left", label: "←" },
+  { key: "up", kind: "special", id: "up", label: "↑" },
+  { key: "down", kind: "special", id: "down", label: "↓" },
+  { key: "right", kind: "special", id: "right", label: "→" },
+  { key: "symbols-divider", kind: "divider" },
+  { key: "pipe", kind: "text", char: "|" },
+  { key: "slash", kind: "text", char: "/" },
+  { key: "tilde", kind: "text", char: "~" },
+  { key: "hyphen", kind: "text", char: "-" },
+  { key: "underscore", kind: "text", char: "_" },
+  { key: "backtick", kind: "text", char: "`" },
+  { key: "single-quote", kind: "text", char: "'" },
+  { key: "double-quote", kind: "text", char: '"' },
+  { key: "paste", kind: "paste" },
 ];
 
-// Ctrl + key → control byte (e.g. Ctrl+C → 0x03, Ctrl+[ → ESC). Returns null
-// when the character has no control mapping, leaving it untransformed.
-export function controlByte(ch: string): string | null {
+function controlByte(ch: string): string | null {
   if (ch.length !== 1) {
     return null;
   }
@@ -62,9 +56,6 @@ export function controlByte(ch: string): string | null {
   return null;
 }
 
-// Encodes a printable character (symbol key or soft-keyboard keystroke) under
-// the active sticky modifiers. Ctrl rewrites a single char to its control
-// byte; Alt prefixes ESC (meta).
 export function encodeText(text: string, mods: Modifiers): string {
   let out = text;
   if (mods.ctrl !== "off" && text.length === 1) {
@@ -86,8 +77,6 @@ const ARROW_FINAL: Record<"up" | "down" | "left" | "right", string> = {
   left: "D",
 };
 
-// Encodes a special key. Arrows gain a CSI modifier code when Ctrl/Alt are
-// active (e.g. Ctrl+Up → ESC[1;5A); esc/tab get an ESC prefix under Alt.
 export function encodeSpecial(id: SpecialKeyId, mods: Modifiers): string {
   if (id === "esc") {
     return mods.alt !== "off" ? ESC + ESC : ESC;
@@ -104,24 +93,22 @@ export function hasActiveModifier(mods: Modifiers): boolean {
   return mods.ctrl !== "off" || mods.alt !== "off";
 }
 
-// Sticky modifier state machine: off → armed → (double-tap) locked → off.
-// A plain tap on an armed modifier toggles it back off.
-function nextModState(current: ModState, doubleTap: boolean): ModState {
-  switch (current) {
-    case "off":
-      return "armed";
-    case "armed":
-      return doubleTap ? "locked" : "off";
-    case "locked":
-      return "off";
-  }
-}
-
 export function armModifier(mods: Modifiers, which: ModKey, doubleTap: boolean): Modifiers {
-  return { ...mods, [which]: nextModState(mods[which], doubleTap) };
+  let next: ModState;
+  switch (mods[which]) {
+    case "off":
+      next = "armed";
+      break;
+    case "armed":
+      next = doubleTap ? "locked" : "off";
+      break;
+    case "locked":
+      next = "off";
+      break;
+  }
+  return { ...mods, [which]: next };
 }
 
-// Clears armed modifiers after a key is sent; locked modifiers persist.
 export function consumeArmed(mods: Modifiers): Modifiers {
   return {
     ctrl: mods.ctrl === "armed" ? "off" : mods.ctrl,

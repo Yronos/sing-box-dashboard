@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
-import { normalizeServerUrl, type Server } from "../api/config";
-import { DaemonApi } from "../api/daemon";
+import { normalizeServerUrl } from "../api/config";
 import { useDiagnosedConnectError } from "../app/connectError";
 import { useI18n } from "../app/i18n";
 import { Spinner, StateDot } from "./ui";
 import styles from "./ReachabilityIndicator.module.css";
 import { cx } from "../lib/cx";
+import { probeServerReachable } from "../lib/reachability";
 
 export type ReachabilityStatus = "idle" | "checking" | "online" | "offline";
 
@@ -18,30 +18,8 @@ export interface Reachability {
 const DEBOUNCE_MS = 300;
 const PROBE_TIMEOUT_MS = 8000;
 
-async function probeReachable(server: Server, signal: AbortSignal): Promise<void> {
-  const api = new DaemonApi(server);
-  for await (const _ of api.client.subscribeServiceStatus({}, { signal })) {
-    void _;
-    return;
-  }
-  throw new Error("Stream ended without a status message");
-}
-
-export async function checkServerReachable(
-  url: string,
-  secret: string,
-  signal: AbortSignal,
-): Promise<boolean> {
-  try {
-    await probeReachable({ id: "", name: "", url: normalizeServerUrl(url), secret }, signal);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function useServerReachability(url: string, secret: string): Reachability {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const normalized = normalizeServerUrl(url);
   const [state, setState] = useState<Reachability>({ status: "idle", error: null });
   const firstRun = useRef(true);
@@ -59,7 +37,11 @@ export function useServerReachability(url: string, secret: string): Reachability
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const debounce = setTimeout(() => {
       timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-      probeReachable({ id: "", name: "", url: normalized, secret }, controller.signal)
+      probeServerReachable(
+        { id: "", name: "", url: normalized, secret },
+        language,
+        controller.signal,
+      )
         .then(() => {
           if (!cancelled) {
             setState({ status: "online", error: null });
@@ -87,7 +69,7 @@ export function useServerReachability(url: string, secret: string): Reachability
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [normalized, secret, t]);
+  }, [normalized, secret, language, t]);
 
   return state;
 }

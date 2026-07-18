@@ -11,9 +11,6 @@ import {
 import { Icon } from "./Icon";
 import styles from "./TerminalSymbolBar.module.css";
 
-// Keep in sync with the `.terminal-symbol-bar` height in TerminalSymbolBar.module.css; the
-// terminal host reserves this much bottom padding so the cursor row stays
-// visible above the bar.
 export const SYMBOL_BAR_HEIGHT = 46;
 
 const SPECIAL_ARIA: Record<SpecialKeyId, MessageKey> = {
@@ -41,15 +38,15 @@ export function TerminalSymbolBar(props: {
       role="toolbar"
       aria-label={t("Terminal keys")}
     >
-      {DEFAULT_KEYS.map((key, index) => {
+      {DEFAULT_KEYS.map((key) => {
         if (key.kind === "divider") {
-          return <span key={index} className={styles.symbolDivider} aria-hidden="true" />;
+          return <span key={key.key} className={styles.symbolDivider} aria-hidden="true" />;
         }
         if (key.kind === "modifier") {
           const state = props.modifiers[key.mod];
           return (
             <SymbolButton
-              key={index}
+              key={key.key}
               className={state === "off" ? undefined : styles[state]}
               ariaLabel={key.mod === "ctrl" ? t("Control") : t("Option")}
               ariaPressed={state !== "off"}
@@ -61,7 +58,7 @@ export function TerminalSymbolBar(props: {
         }
         if (key.kind === "paste") {
           return (
-            <SymbolButton key={index} ariaLabel={t("Paste")} onPress={props.onPaste}>
+            <SymbolButton key={key.key} ariaLabel={t("Paste")} onPress={props.onPaste}>
               <Icon name="content_copy" size={16} />
             </SymbolButton>
           );
@@ -69,7 +66,7 @@ export function TerminalSymbolBar(props: {
         if (key.kind === "text") {
           return (
             <SymbolButton
-              key={index}
+              key={key.key}
               className={styles.symbol}
               ariaLabel={key.char}
               onPress={() => props.onKey(key)}
@@ -80,7 +77,7 @@ export function TerminalSymbolBar(props: {
         }
         return (
           <SymbolButton
-            key={index}
+            key={key.key}
             ariaLabel={t(SPECIAL_ARIA[key.id])}
             onPress={() => props.onKey(key)}
           >
@@ -105,8 +102,6 @@ function SymbolButton(props: {
       className={props.className}
       aria-label={props.ariaLabel}
       aria-pressed={props.ariaPressed}
-      // Prevent the tap from blurring the terminal (which would dismiss the
-      // soft keyboard); run the action on click instead.
       onPointerDown={(event) => event.preventDefault()}
       onClick={props.onPress}
     >

@@ -1,70 +1,30 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 
 import { Select } from "../components/ui";
+import { watchStoredValues } from "../lib/storage";
 import { LANGUAGES, TRANSLATIONS, type Language, type MessageKey, type PluralForms } from "./translations";
+import {
+  detectSystemLanguage,
+  loadLanguagePreference,
+  saveLanguagePreference,
+  subscribeSystemLanguage,
+  type LanguagePreference,
+} from "./i18nCore";
 
 export type { Language, MessageKey };
-
-export type LanguagePreference = "auto" | Language;
-
-const LANGUAGE_KEY = "sing-box-dashboard.language";
-
-export function loadLanguagePreference(): LanguagePreference {
-  const value = localStorage.getItem(LANGUAGE_KEY);
-  if (value && LANGUAGES.some((language) => language.value === value)) {
-    return value as Language;
-  }
-  return "auto";
-}
-
-export function saveLanguagePreference(preference: LanguagePreference) {
-  if (preference === "auto") {
-    localStorage.removeItem(LANGUAGE_KEY);
-  } else {
-    localStorage.setItem(LANGUAGE_KEY, preference);
-  }
-}
-
-export function detectSystemLanguage(): Language {
-  for (const tag of navigator.languages ?? [navigator.language]) {
-    const lower = tag.toLowerCase();
-    if (lower.startsWith("zh")) {
-      if (/hant|tw|hk|mo/.test(lower)) {
-        return "zh-Hant";
-      }
-      return "zh-Hans";
-    }
-    if (lower.startsWith("fa")) {
-      return "fa";
-    }
-    if (lower.startsWith("ru")) {
-      return "ru";
-    }
-    if (lower.startsWith("en")) {
-      return "en";
-    }
-  }
-  return "en";
-}
-
-function applyLanguage(language: Language) {
-  document.documentElement.lang = language;
-  document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
-}
 
 export type TranslateParams = Record<string, string | number>;
 export type Translate = (key: MessageKey, params?: TranslateParams) => string;
 
 const pluralRulesCache = new Map<Language, Intl.PluralRules>();
-
-function pluralRules(language: Language): Intl.PluralRules {
-  let rules = pluralRulesCache.get(language);
-  if (!rules) {
-    rules = new Intl.PluralRules(language);
-    pluralRulesCache.set(language, rules);
-  }
-  return rules;
-}
 
 function translate(language: Language, key: MessageKey, params?: TranslateParams): string {
   const entry: string | PluralForms = language === "en" ? key : (TRANSLATIONS[key]?.[language] ?? key);
@@ -73,7 +33,16 @@ function translate(language: Language, key: MessageKey, params?: TranslateParams
     text = entry;
   } else {
     const count = typeof params?.count === "number" ? params.count : null;
-    text = (count !== null ? entry[pluralRules(language).select(count)] : undefined) ?? entry.other;
+    if (count === null) {
+      text = entry.other;
+    } else {
+      let rules = pluralRulesCache.get(language);
+      if (!rules) {
+        rules = new Intl.PluralRules(language);
+        pluralRulesCache.set(language, rules);
+      }
+      text = entry[rules.select(count)] ?? entry.other;
+    }
   }
   if (params) {
     for (const [name, value] of Object.entries(params)) {
@@ -104,18 +73,21 @@ export function I18nProvider(props: { children: ReactNode }) {
   const [preference, setPreferenceState] = useState<LanguagePreference>(() =>
     loadLanguagePreference(),
   );
-  const [systemLanguage, setSystemLanguage] = useState<Language>(() => detectSystemLanguage());
-
-  useEffect(() => {
-    const onChange = () => setSystemLanguage(detectSystemLanguage());
-    window.addEventListener("languagechange", onChange);
-    return () => window.removeEventListener("languagechange", onChange);
-  }, []);
+  useEffect(
+    () => watchStoredValues(() => setPreferenceState(loadLanguagePreference())),
+    [],
+  );
+  const systemLanguage = useSyncExternalStore(
+    subscribeSystemLanguage,
+    detectSystemLanguage,
+    detectSystemLanguage,
+  );
 
   const language = preference === "auto" ? systemLanguage : preference;
 
   useEffect(() => {
-    applyLanguage(language);
+    document.documentElement.lang = language;
+    document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
   }, [language]);
 
   const value = useMemo<I18n>(
@@ -124,7 +96,7 @@ export function I18nProvider(props: { children: ReactNode }) {
       preference,
       setPreference: (next) => {
         saveLanguagePreference(next);
-        setPreferenceState(next);
+        setPreferenceState(() => next);
       },
       t: (key, params) => translate(language, key, params),
     }),

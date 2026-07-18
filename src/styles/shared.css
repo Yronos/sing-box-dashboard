@@ -1,31 +1,3 @@
-/*
- * Global design-system stylesheet. Two tiers live here, referenced by bare
- * class strings (never CSS-module-scoped):
- *
- *   1. PRIMITIVES — owned by a component in components/ui.tsx (and Icon.tsx).
- *      A consumer renders <Button>/<Badge>/<StateDot>/<Card>/<Select> etc.; it
- *      never types these class strings, and a primitive's variants are typed
- *      props (e.g. <Button variant="danger">), not ad-hoc classes. Examples:
- *      button, icon-button, badge, state-dot, card, menu, input, select,
- *      switch, segmented, spinner, field, banner, dialog, drawer.
- *
- *   2. LAYOUT UTILITIES — view-shell scaffolding used as raw class strings
- *      across views: page, page-full, page-header, page-title, settings-row,
- *      settings-stack, list-section-title, row-actions, hint, back-button,
- *      actions. These have no state/variants of their own.
- *
- * Rules:
- *   - State/variant classes belong to whoever OWNS the element. A primitive's
- *     variants are typed props here; a VIEW element's state is a CSS-module
- *     class in that view's *.module.css (never a bare string + :global).
- *   - A CSS module reaches into this layer only via :global(...) to compose a
- *     primitive or utility it renders, or to position one through a className
- *     prop. The Icon `.icon` hook is the canonical :global target.
- *   - Order matters: some grouped/:active rules rely on source order (the
- *     no-descending-specificity stylelint rule is intentionally off), so keep
- *     related rules together rather than reordering by tier.
- */
-
 .text-large-title,
 .page-title {
   font-family: var(--font-serif);
@@ -60,7 +32,7 @@
 
 .text-headline,
 .card-header,
-.field > label {
+.field-label {
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
 }
@@ -179,6 +151,26 @@
   min-width: 180px;
 }
 
+.menu.context-menu {
+  position: fixed;
+  inset: auto;
+  width: max-content;
+  min-width: 180px;
+}
+
+.menu.popover-menu {
+  position: fixed;
+  inset: auto;
+  width: max-content;
+  min-width: 180px;
+  margin: 0;
+  overflow: visible;
+}
+
+a.menu-item {
+  text-decoration: none;
+}
+
 .menu-label {
   padding: var(--space-6) var(--space-8) var(--space-2);
   color: var(--text-faint);
@@ -283,7 +275,11 @@
   margin-bottom: var(--space-10);
 }
 
-.card-header .icon {
+.card-header:last-child {
+  margin-bottom: 0;
+}
+
+.card-header > .icon {
   color: var(--text-faint);
 }
 
@@ -378,6 +374,78 @@
 
 .nav-row > .icon:last-child {
   color: var(--text-faint);
+}
+
+.nav-lines {
+  margin: calc(var(--space-20) * -1);
+}
+
+.nav-line {
+  display: flex;
+  gap: var(--space-10);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-12) var(--space-20);
+  font-size: var(--text-base);
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+a.nav-line {
+  text-decoration: none;
+}
+
+.nav-line.static {
+  cursor: default;
+}
+
+.nav-line:first-child {
+  border-radius: calc(var(--radius-card) - var(--radius-xs)) calc(var(--radius-card) - var(--radius-xs)) 0 0;
+}
+
+.nav-line:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 calc(var(--radius-card) - var(--radius-xs)) calc(var(--radius-card) - var(--radius-xs));
+}
+
+.nav-line:only-child {
+  border-radius: calc(var(--radius-card) - var(--radius-xs));
+}
+
+.nav-line:hover:not(.static) {
+  background: var(--hover);
+}
+
+.nav-line > .icon:first-child {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.nav-line-label {
+  font-weight: var(--weight-medium);
+}
+
+.nav-line-value {
+  display: inline-flex;
+  gap: var(--space-8);
+  align-items: center;
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+.nav-line > .icon:last-child {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+[dir="rtl"] .nav-line > .icon:last-child {
+  transform: scaleX(-1);
 }
 
 .button {
@@ -588,7 +656,7 @@
   margin-bottom: var(--space-12);
 }
 
-.field > label {
+.field-label {
   color: var(--text-secondary);
 }
 
@@ -631,6 +699,9 @@
 
 .input:focus, .select:focus {
   outline: none;
+}
+
+.input:focus-visible, .select:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -642,8 +713,8 @@ button.select {
 }
 
 button.select[aria-expanded="true"] {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--inset);
+  border-color: var(--border-strong);
 }
 
 button.select:disabled {
@@ -716,6 +787,11 @@ button.select:disabled {
   background: var(--accent);
 }
 
+.switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .switch.on::after {
   transform: translateX(15px);
 }
@@ -739,6 +815,17 @@ button.select:disabled {
 
 .search-input input {
   padding-inline-start: var(--space-32);
+}
+
+.secret-input {
+  display: flex;
+  gap: var(--space-8);
+  align-items: center;
+}
+
+.secret-input > .input {
+  flex: 1;
+  min-width: 0;
 }
 
 .settings-row {
@@ -883,7 +970,7 @@ button.settings-row:focus-visible {
   display: inline-flex;
   overflow: hidden;
 
-  /* stylelint-disable color-no-hex -- literal color wheel */
+  /* stylelint-disable color-no-hex */
   background: conic-gradient(
     #ff5257,
     #ffc600,

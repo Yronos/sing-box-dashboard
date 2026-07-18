@@ -151,6 +151,7 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: none;
 }
 
@@ -180,6 +181,49 @@
 .connecting-spinner {
   width: 21px;
   height: 21px;
+}
+
+.desktop-connecting-view {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.desktop-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.desktop-root .app,
+.desktop-root :global(.setup) {
+  flex: 1;
+  min-height: 0;
+}
+
+.content-column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.content-column > .content {
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar-titlebar {
+  display: none;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
+:global(body[data-platform="darwin"]) .sidebar-titlebar {
+  display: block;
+  height: 28px;
 }
 
 .reconnect-pill {
@@ -212,9 +256,7 @@
     }
 
   .mobile-topbar {
-      /* iOS tints the status bar from the page's top pixels, so the topbar
-         must stay undimmed (above the scrim, below the drawer) while the
-         drawer is open. */
+      /* iOS tints the status bar from the page's top pixels. */
       position: relative;
       z-index: var(--z-topbar);
       display: flex;
@@ -260,6 +302,9 @@
       inset: 0;
       z-index: var(--z-scrim);
       display: block;
+      padding: 0;
+      background: transparent;
+      border: 0;
       animation: fade-in var(--transition-medium);
     }
 

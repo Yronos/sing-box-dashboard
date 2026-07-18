@@ -4,14 +4,17 @@ import type { LogEntry } from "../api/daemon";
 import { pad2 } from "../api/format";
 import { isTerminalCode, useStream } from "../api/stream";
 import { useApi } from "../app/context";
+import { useDesktopHost } from "../app/desktop";
 import { showError } from "../app/errorStore";
 import { useStreamOutage } from "../app/hooks";
 import { useI18n } from "../app/i18n";
 import { Icon } from "../components/Icon";
+import { PageHeader } from "../components/PageHeader";
 import { StreamErrorBanner } from "../components/StreamBanner";
 import { EmptyState, IconButton, MenuItem, OthersMenu, SearchInput, Spinner, SubMenu } from "../components/ui";
-import { LogLevel, ServiceStatus_Type } from "../gen/daemon/started_service_pb";
+import { LogLevel } from "../gen/daemon/started_service_pb";
 import { ansiColorCss, parseAnsi, parseCssColor, stripAnsi, type Rgb } from "../lib/ansi";
+import { canShare, shareError, shareFile } from "../lib/sharing";
 import styles from "./LogsView.module.css";
 
 const MAX_VISIBLE_LOGS = 1000;
@@ -39,17 +42,25 @@ function resolveBackground(): Rgb {
   return parseCssColor(value) ?? [255, 255, 255];
 }
 
-function fileTimestamp(): string {
+function logFileName(): string {
   const now = new Date();
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}-${pad2(now.getHours())}.${pad2(now.getMinutes())}.${pad2(now.getSeconds())}`;
+  const timestamp = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}-${pad2(now.getHours())}.${pad2(now.getMinutes())}.${pad2(now.getSeconds())}`;
+  return `logs-${timestamp}.txt`;
+}
+
+function onShareError(error: unknown): void {
+  const reportableError = shareError(error);
+  if (reportableError !== null) {
+    showError(reportableError);
+  }
 }
 
 export function LogsView() {
   const api = useApi();
+  const host = useDesktopHost();
   const { t } = useI18n();
   const logs = useStream(api.logs);
   const outage = useStreamOutage(logs, isTerminalCode(logs.errorCode));
-  const serviceStatus = useStream(api.serviceStatus);
   const [level, setLevel] = useState<LogLevel | null>(null);
   const [paused, setPaused] = useState(false);
   const [frozen, setFrozen] = useState<LogEntry[]>([]);
@@ -57,7 +68,6 @@ export function LogsView() {
   const viewRef = useRef<HTMLDivElement>(null);
   const background = useLogBackground();
 
-  const started = serviceStatus.data.status?.status === ServiceStatus_Type.STARTED;
   const effectiveLevel = level ?? logs.data.defaultLevel ?? LogLevel.INFO;
 
   const togglePause = () => {
@@ -89,12 +99,7 @@ export function LogsView() {
   );
 
   const logsText = () => filtered.map((entry) => stripAnsi(entry.message)).join("\n");
-  const logFileName = () => `logs-${fileTimestamp()}.txt`;
-  const canShare = typeof navigator.share === "function";
-
-  const copyLogs = () => {
-    void navigator.clipboard.writeText(logsText()).catch(showError);
-  };
+  const sharingAvailable = canShare(host);
 
   const saveLogs = () => {
     const url = URL.createObjectURL(new Blob([logsText()], { type: "text/plain" }));
@@ -105,21 +110,9 @@ export function LogsView() {
     URL.revokeObjectURL(url);
   };
 
-  const onShareError = (error: unknown) => {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      return;
-    }
-    showError(error);
-  };
-
   const shareLogs = () => {
     const text = logsText();
-    const file = new File([text], logFileName(), { type: "text/plain" });
-    if (navigator.canShare?.({ files: [file] })) {
-      void navigator.share({ files: [file] }).catch(onShareError);
-    } else {
-      void navigator.share({ text }).catch(onShareError);
-    }
+    void shareFile(host, logFileName(), text, "text/plain").catch(onShareError);
   };
 
   useLayoutEffect(() => {
@@ -148,8 +141,6 @@ export function LogsView() {
     );
   } else if (outage !== null) {
     body = null;
-  } else if (!started && serviceStatus.phase === "active") {
-    body = <EmptyState icon="text_snippet">{t("Service not started")}</EmptyState>;
   } else if (logs.phase === "connecting") {
     body = (
       <EmptyState>
@@ -162,57 +153,62 @@ export function LogsView() {
 
   return (
     <div className="page page-full">
-      <div className="page-header">
-        <h1 className="page-title">{t("Logs")}</h1>
-        <div className="actions">
-          <IconButton
-            active={paused}
-            title={paused ? t("Resume scrolling") : t("Pause scrolling")}
-            onClick={togglePause}
-          >
-            <Icon name={paused ? "play_arrow" : "pause"} />
-          </IconButton>
-          <OthersMenu>
-            <SubMenu label={t("Log Level")} icon="filter_list">
-              <MenuItem checked={level === null} onSelect={() => setLevel(null)}>
-                {t("Default")}
-              </MenuItem>
-              {LEVEL_OPTIONS.map((option) => (
-                <MenuItem
-                  key={option.value}
-                  checked={level === option.value}
-                  onSelect={() => setLevel(option.value)}
-                >
-                  {option.label}
-                </MenuItem>
-              ))}
-            </SubMenu>
-            <SubMenu label={t("Save")} icon="save">
-              <MenuItem icon="content_copy" onSelect={copyLogs}>
-                {t("To Clipboard")}
-              </MenuItem>
-              <MenuItem icon="save" onSelect={saveLogs}>
-                {t("To File")}
-              </MenuItem>
-              {canShare && (
-                <MenuItem icon="share" onSelect={shareLogs}>
-                  {t("Share")}
-                </MenuItem>
-              )}
-            </SubMenu>
-            <div className="menu-divider" />
-            <MenuItem
-              danger
-              icon="delete"
-              onSelect={() => {
-                void api.clearLogs().catch(showError);
-              }}
+      <PageHeader
+        title={t("Logs")}
+        actions={
+          <>
+            <IconButton
+              active={paused}
+              title={paused ? t("Resume scrolling") : t("Pause scrolling")}
+              onClick={togglePause}
             >
-              {t("Clear Logs")}
-            </MenuItem>
-          </OthersMenu>
-        </div>
-      </div>
+              <Icon name={paused ? "play_arrow" : "pause"} />
+            </IconButton>
+            <OthersMenu>
+              <SubMenu label={t("Log Level")} icon="filter_list">
+                <MenuItem checked={level === null} onSelect={() => setLevel(null)}>
+                  {t("Default")}
+                </MenuItem>
+                {LEVEL_OPTIONS.map((option) => (
+                  <MenuItem
+                    key={option.value}
+                    checked={level === option.value}
+                    onSelect={() => setLevel(option.value)}
+                  >
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </SubMenu>
+              <SubMenu label={t("Save")} icon="save">
+                <MenuItem
+                  icon="content_copy"
+                  onSelect={() => void navigator.clipboard.writeText(logsText()).catch(showError)}
+                >
+                  {t("To Clipboard")}
+                </MenuItem>
+                <MenuItem icon="save" onSelect={saveLogs}>
+                  {t("To File")}
+                </MenuItem>
+                {sharingAvailable && (
+                  <MenuItem icon="share" onSelect={shareLogs}>
+                    {t("Share")}
+                  </MenuItem>
+                )}
+              </SubMenu>
+              <div className="menu-divider" />
+              <MenuItem
+                danger
+                icon="delete"
+                onSelect={() => {
+                  void api.clearLogs().catch(showError);
+                }}
+              >
+                {t("Clear Logs")}
+              </MenuItem>
+            </OthersMenu>
+          </>
+        }
+      />
       <div className="field">
         <SearchInput value={search} onChange={setSearch} />
       </div>

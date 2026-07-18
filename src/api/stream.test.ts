@@ -9,6 +9,7 @@ describe("StreamStore", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -56,6 +57,29 @@ describe("StreamStore", () => {
     unsubscribe();
   });
 
+  it("publishes updates while rendering frames are suspended", async () => {
+    const requestFrame = vi.fn(() => 1);
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.resetModules();
+    const { StreamStore: FrameIndependentStreamStore } = await import("./stream");
+    const store = new FrameIndependentStreamStore<number>(
+      () => 0,
+      async ({ update }) => {
+        update(() => 1);
+        await new Promise(() => {});
+      },
+    );
+    let notified = 0;
+    const unsubscribe = store.subscribe(() => {
+      notified += 1;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notified).toBe(1);
+    expect(requestFrame).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
   it("aborts the stream when the last subscriber leaves", () => {
     let aborted = false;
     const store = new StreamStore<null>(
@@ -91,10 +115,41 @@ describe("StreamStore", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(calls).toBe(2);
+    expect(store.getSnapshot().phase).toBe("error");
+    expect(store.getSnapshot().error).toBe("boom");
     await vi.advanceTimersByTimeAsync(1999);
     expect(calls).toBe(2);
+    expect(store.getSnapshot().phase).toBe("error");
     await vi.advanceTimersByTimeAsync(1);
     expect(calls).toBe(3);
+    expect(store.getSnapshot().phase).toBe("error");
+    unsubscribe();
+  });
+
+  it("keeps the last error visible while a reconnect attempt is pending", async () => {
+    let calls = 0;
+    let rejectFirst: (error: Error) => void = () => {};
+    const store = new StreamStore<null>(
+      () => null,
+      () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise((_, reject) => {
+            rejectFirst = reject;
+          });
+        }
+        return new Promise(() => {});
+      },
+    );
+    const unsubscribe = store.subscribe(() => {});
+
+    rejectFirst(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getSnapshot()).toMatchObject({ phase: "error", error: "offline" });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(calls).toBe(2);
+    expect(store.getSnapshot()).toMatchObject({ phase: "error", error: "offline" });
     unsubscribe();
   });
 
@@ -184,6 +239,30 @@ describe("StreamStore", () => {
     rejectCurrent(new Error("connection lost"));
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toBe(2);
+    unsubscribe();
+  });
+
+  it("reconnects an active stream immediately", async () => {
+    let calls = 0;
+    let aborted = 0;
+    const store = new StreamStore<number>(
+      () => 0,
+      ({ signal, update }) => {
+        calls += 1;
+        update(() => calls);
+        signal.addEventListener("abort", () => {
+          aborted += 1;
+        });
+        return new Promise(() => {});
+      },
+    );
+    const unsubscribe = store.subscribe(() => {});
+    expect(calls).toBe(1);
+
+    store.reconnectNow();
+    expect(aborted).toBe(1);
+    expect(calls).toBe(2);
+    expect(store.getSnapshot()).toMatchObject({ phase: "active", data: 2 });
     unsubscribe();
   });
 
