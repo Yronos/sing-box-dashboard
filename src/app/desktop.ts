@@ -209,6 +209,7 @@ export interface DesktopHost {
   configuration: {
     check(content: string): Promise<void>;
     format(content: string): Promise<string>;
+    generateSchema(): Promise<string>;
   };
   tools: {
     startStandaloneNetworkQualityTest(

@@ -9,7 +9,7 @@ import { showError } from "../app/errorStore";
 import { useI18n } from "../app/i18n";
 import { DesktopToolbar } from "../components/DesktopToolbar";
 import { Icon } from "../components/Icon";
-import type { JsonEditorHandle } from "../components/JsonEditor";
+import type { JsonEditorHandle, JsonEditorSchema } from "../components/JsonEditor";
 import {
   Button,
   Card,
@@ -27,6 +27,7 @@ import {
 import { ProfileQRSDialog } from "./ProfileQRSDialog";
 import styles from "./ProfileViews.module.css";
 import { cx } from "../lib/cx";
+import { createCheckScheduler, type CheckScheduler } from "../lib/checkScheduler";
 import { canShareFiles, shareError, shareFile } from "../lib/sharing";
 
 const JsonEditor = lazy(() =>
@@ -615,10 +616,28 @@ export function ProfileContentWindow(props: {
   const [canRedo, setCanRedo] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [busy, setBusy] = useState(false);
-  const checkTimer = useRef<number | null>(null);
+  const [schema, setSchema] = useState<JsonEditorSchema | null>(null);
   const contentRef = useRef<string | null>(null);
   const savedContentRef = useRef<string | null>(null);
   const editorRef = useRef<JsonEditorHandle>(null);
+  const checkSchedulerRef = useRef<CheckScheduler | null>(null);
+  if (checkSchedulerRef.current === null) {
+    checkSchedulerRef.current = createCheckScheduler({
+      delayMs: 1000,
+      isBlocked: () => editorRef.current?.isCompletionActive() ?? false,
+      run: () => {
+        const value = contentRef.current;
+        if (value === null || value.trim() === "") {
+          return;
+        }
+        host.configuration.check(value).then(
+          () => setCheckError(null),
+          (error: unknown) => setCheckError(describeError(error).message),
+        );
+      },
+    });
+  }
+  const checkScheduler = checkSchedulerRef.current;
 
   useEffect(() => {
     host.profiles
@@ -634,11 +653,24 @@ export function ProfileContentWindow(props: {
         host.profileEditor.closeWindow();
       });
     return () => {
-      if (checkTimer.current !== null) {
-        window.clearTimeout(checkTimer.current);
-      }
+      checkScheduler.cancel();
     };
-  }, [host, props.profileId]);
+  }, [host, props.profileId, checkScheduler]);
+
+  useEffect(() => {
+    let cancelled = false;
+    host.configuration
+      .generateSchema()
+      .then((content) => {
+        if (!cancelled) {
+          setSchema(JSON.parse(content) as JsonEditorSchema);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [host]);
 
   const edit = (value: string, undoAvailable: boolean, redoAvailable: boolean) => {
     contentRef.current = value;
@@ -646,19 +678,14 @@ export function ProfileContentWindow(props: {
     setContent(() => value);
     setCanUndo(() => undoAvailable);
     setCanRedo(() => redoAvailable);
-    setCheckError(null);
-    if (checkTimer.current !== null) {
-      window.clearTimeout(checkTimer.current);
+    if (!(editorRef.current?.isCompletionActive() ?? false)) {
+      setCheckError(null);
     }
     if (value.trim() === "") {
+      checkScheduler.cancel();
       return;
     }
-    checkTimer.current = window.setTimeout(() => {
-      host.configuration.check(value).then(
-        () => setCheckError(null),
-        (error: unknown) => setCheckError(describeError(error).message),
-      );
-    }, 1000);
+    checkScheduler.schedule();
   };
 
   const format = () => {
@@ -766,8 +793,14 @@ export function ProfileContentWindow(props: {
               className={styles.profileEditor}
               initialValue={savedContent}
               readOnly={props.readOnly}
+              schema={schema}
               onChange={edit}
               onSave={props.readOnly ? undefined : () => void save()}
+              onCompletionOpenChange={(open) => {
+                if (!open) {
+                  checkScheduler.unblocked();
+                }
+              }}
             />
           </Suspense>
         )}
