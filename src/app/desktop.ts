@@ -151,7 +151,9 @@ export interface DesktopOpenConnectBrowserRequest {
   url: string;
   finalURL: string;
   cookieNames: string[];
+  earlyCookieNames: string[];
   headerNames: string[];
+  callbackURLPrefixes: string[];
 }
 
 export interface DesktopOpenConnectBrowserResult {
@@ -177,10 +179,19 @@ export interface DesktopHost {
     writeClipboardText(text: string): Promise<void>;
     openContextMenu(selectionText: string): Promise<DesktopTerminalContextMenuResult>;
   };
+  profileEditor: {
+    openWindow(profileId: string, readOnly: boolean): void;
+    closeWindow(): void;
+    setDirty(dirty: boolean): void;
+    onCloseRequested(listener: () => void): () => void;
+  };
   openConnectBrowser: {
     authenticate(
+      browserSessionID: string,
+      storageID: string,
       request: DesktopOpenConnectBrowserRequest,
     ): Promise<DesktopOpenConnectBrowserResult | null>;
+    cancel(browserSessionID: string): void;
   };
   setup: {
     repairInstall(): Promise<boolean>;
@@ -198,6 +209,7 @@ export interface DesktopHost {
   configuration: {
     check(content: string): Promise<void>;
     format(content: string): Promise<string>;
+    generateSchema(): Promise<string>;
   };
   tools: {
     startStandaloneNetworkQualityTest(
