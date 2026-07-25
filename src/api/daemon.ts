@@ -417,8 +417,8 @@ export class DaemonApi {
     this.usbip.reconnectNow();
   }
 
-  async urlTest(groupTag: string): Promise<void> {
-    await this.client.uRLTest({ outboundTag: groupTag });
+  async urlTest(outboundTag: string): Promise<void> {
+    await this.client.uRLTest({ outboundTag });
   }
 
   async selectOutbound(groupTag: string, outboundTag: string): Promise<void> {

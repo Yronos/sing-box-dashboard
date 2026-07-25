@@ -567,7 +567,7 @@ function CoreViewContent({ host }: { host: DesktopHost }) {
         ) : (
           <>
             <div className={styles.settingsList}>
-              <div className="settings-row" onContextMenu={copyMenu.onContextMenu}>
+              <div className="settings-row" {...copyMenu.triggerProps}>
                 <span className="settings-row-label">{t("Version")}</span>
                 <span className="nav-row-detail">{coreVersion}</span>
                 {copyMenu.element}

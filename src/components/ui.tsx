@@ -1,4 +1,4 @@
-import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type MouseEventHandler, type ReactElement, type ReactNode, type RefObject } from "react";
+import { Children, cloneElement, createContext, isValidElement, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type MouseEventHandler, type PointerEventHandler, type ReactElement, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { encode as encodeQR } from "uqr";
 
@@ -161,13 +161,88 @@ export function EmptyState(props: { icon?: IconName; className?: string; childre
   );
 }
 
+const LONG_PRESS_DELAY = 500;
+const LONG_PRESS_MOVE_LIMIT = 10;
+const CONTEXT_MENU_MARGIN = 8;
+
 export function useContextMenu(menu: ReactNode) {
   const [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const pressRef = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const openedByPressRef = useRef(false);
   useDismiss(menuRef, point !== null, () => setPoint(null));
+  useLayoutEffect(() => {
+    if (point === null || !menuRef.current) {
+      return;
+    }
+    const rect = menuRef.current.getBoundingClientRect();
+    const left = clampToViewport(point.x, rect.width, window.innerWidth);
+    const top = clampToViewport(point.y, rect.height, window.innerHeight);
+    if (left !== point.x || top !== point.y) {
+      setPoint({ x: left, y: top });
+    }
+  }, [point]);
+  const cancelLongPress = () => {
+    if (pressRef.current !== null) {
+      window.clearTimeout(pressRef.current.timer);
+      pressRef.current = null;
+    }
+  };
+  useEffect(
+    () => () => {
+      if (pressRef.current !== null) {
+        window.clearTimeout(pressRef.current.timer);
+      }
+    },
+    [],
+  );
   const onContextMenu: MouseEventHandler<HTMLElement> = (event) => {
     event.preventDefault();
+    cancelLongPress();
     setPoint({ x: event.clientX, y: event.clientY });
+  };
+  const onPointerDown: PointerEventHandler<HTMLElement> = (event) => {
+    openedByPressRef.current = false;
+    cancelLongPress();
+    if (event.pointerType === "mouse") {
+      return;
+    }
+    const x = event.clientX;
+    const y = event.clientY;
+    pressRef.current = {
+      x,
+      y,
+      timer: window.setTimeout(() => {
+        pressRef.current = null;
+        openedByPressRef.current = true;
+        setPoint({ x, y });
+      }, LONG_PRESS_DELAY),
+    };
+  };
+  const onPointerMove: PointerEventHandler<HTMLElement> = (event) => {
+    const press = pressRef.current;
+    if (
+      press !== null &&
+      (Math.abs(event.clientX - press.x) > LONG_PRESS_MOVE_LIMIT ||
+        Math.abs(event.clientY - press.y) > LONG_PRESS_MOVE_LIMIT)
+    ) {
+      cancelLongPress();
+    }
+  };
+  const onClickCapture: MouseEventHandler<HTMLElement> = (event) => {
+    if (openedByPressRef.current) {
+      openedByPressRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+  const triggerProps = {
+    onContextMenu,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp: cancelLongPress,
+    onPointerCancel: cancelLongPress,
+    onClickCapture,
   };
   const element =
     point !== null
@@ -189,7 +264,11 @@ export function useContextMenu(menu: ReactNode) {
           document.body,
         )
       : null;
-  return { onContextMenu, element };
+  return { triggerProps, element };
+}
+
+function clampToViewport(position: number, size: number, viewport: number) {
+  return Math.max(CONTEXT_MENU_MARGIN, Math.min(position, viewport - size - CONTEXT_MENU_MARGIN));
 }
 
 export function NavRow(props: {
@@ -201,7 +280,7 @@ export function NavRow(props: {
   contextMenu?: ReactNode;
 }) {
   const contextMenu = useContextMenu(props.contextMenu);
-  const onContextMenu = props.contextMenu != null ? contextMenu.onContextMenu : undefined;
+  const triggerProps = props.contextMenu != null ? contextMenu.triggerProps : undefined;
   const menu = contextMenu.element;
   const inner = (
     <>
@@ -219,7 +298,7 @@ export function NavRow(props: {
           href={props.href}
           target="_blank"
           rel="noreferrer"
-          onContextMenu={onContextMenu}
+          {...triggerProps}
         >
           {inner}
         </a>
@@ -229,7 +308,7 @@ export function NavRow(props: {
   }
   return (
     <>
-      <button type="button" className="nav-row" onClick={props.onClick} onContextMenu={onContextMenu}>
+      <button type="button" className="nav-row" onClick={props.onClick} {...triggerProps}>
         {inner}
       </button>
       {menu}
