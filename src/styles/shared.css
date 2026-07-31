@@ -350,7 +350,7 @@ a.menu-item {
   border-top: 1px solid var(--border);
 }
 
-.nav-row:hover {
+.nav-row:hover:not(.static) {
   background: var(--hover);
 }
 

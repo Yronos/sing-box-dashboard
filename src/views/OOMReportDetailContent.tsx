@@ -87,7 +87,7 @@ export function OOMReportDetailContent({
             <div className="nav-list">
               {files.map((file) =>
                 file.isProfile ? (
-                  <div key={file.name} className={cx("nav-row", styles.staticRow)}>
+                  <div key={file.name} className={cx("nav-row", "static", styles.staticRow)}>
                     <span>{file.name}</span>
                   </div>
                 ) : (

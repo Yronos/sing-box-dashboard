@@ -26,6 +26,7 @@
 }
 
 .toolbar :global(button),
+.toolbar :global(a),
 .toolbar :global(.select) {
   -webkit-app-region: no-drag;
 }
