@@ -7,6 +7,7 @@
 }
 
 .peer-list {
+  overflow: hidden;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
@@ -22,22 +23,6 @@
   border-top: 1px solid var(--border);
 }
 
-.peer-item:hover {
-  background: var(--hover);
-}
-
-.peer-item:first-child {
-  border-radius: calc(var(--radius-card) - var(--radius-xs)) calc(var(--radius-card) - var(--radius-xs)) 0 0;
-}
-
-.peer-item:last-child {
-  border-radius: 0 0 calc(var(--radius-card) - var(--radius-xs)) calc(var(--radius-card) - var(--radius-xs));
-}
-
-.peer-item:only-child {
-  border-radius: calc(var(--radius-card) - var(--radius-xs));
-}
-
 .peer-item-main {
   display: flex;
   flex: 1;
@@ -51,6 +36,10 @@
   cursor: pointer;
   background: transparent;
   border: 0;
+}
+
+.peer-item-main:hover {
+  background: var(--hover);
 }
 
 .peer-menu {

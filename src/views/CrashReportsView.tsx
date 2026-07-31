@@ -226,7 +226,7 @@ function CrashReportDetailContent({
             <div className="nav-list">
               {files.map((file) =>
                 file.isBinary ? (
-                  <div key={file.name} className={cx("nav-row", styles.staticRow)}>
+                  <div key={file.name} className={cx("nav-row", "static", styles.staticRow)}>
                     <span>{crashReportFileDisplayName(file.name, t)}</span>
                   </div>
                 ) : (
