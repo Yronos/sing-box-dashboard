@@ -48,9 +48,9 @@ export function TerminalSessionLayout(props: {
     <>
       <div className={styles.terminalHostWrap} style={!props.active ? { display: "none" } : undefined}>
         <div className={styles.terminalHost} style={props.hostStyle} ref={props.hostRef} />
-        {props.active && props.connecting && (
+        {props.active && (props.connecting || props.banner) && (
           <div className={styles.terminalConnecting}>
-            <Spinner className={styles.terminalConnectingSpinner} />
+            {props.connecting && <Spinner className={styles.terminalConnectingSpinner} />}
             {props.banner ? (
               <div className={cx("card", styles.terminalBanner)}>{linkifyBanner(props.banner)}</div>
             ) : (

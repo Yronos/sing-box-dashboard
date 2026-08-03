@@ -474,14 +474,27 @@ function TerminalSession(props: {
       {
         onMessage: (message) => {
           switch (message.message.case) {
-            case "authBanner":
-              setBanner(message.message.value.message);
+            case "authBanner": {
+              const bannerMessage = message.message.value.message.trim();
+              if (bannerMessage !== "") {
+                setBanner((previous) => {
+                  if (!previous) {
+                    return bannerMessage;
+                  }
+                  if (previous.includes(bannerMessage)) {
+                    return previous;
+                  }
+                  return `${previous}\n\n${bannerMessage}`;
+                });
+              }
               break;
+            }
             case "ready":
               ready = true;
               lastStatus = null;
               setStatusLine(null);
               setConnecting(false);
+              setBanner(null);
               break;
             case "output":
               terminal.write(message.message.value.data);
