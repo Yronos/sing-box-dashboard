@@ -700,23 +700,25 @@ function TerminalSession(props: {
 
   const keyboardVisible = isMobile && keyboardInset > 100;
   const barVisible = props.active && (keyboardVisible || (symbolBarAlwaysShow && !isMobile));
-  const hostStyle: CSSProperties = {};
+  const barFloating = barVisible && keyboardVisible;
+  const wrapStyle: CSSProperties = {};
   if (activeTheme.background) {
-    hostStyle.background = activeTheme.background;
+    wrapStyle.background = activeTheme.background;
   }
-  if (barVisible) {
-    hostStyle.paddingBottom = `calc(${keyboardInset + SYMBOL_BAR_HEIGHT + 8}px + env(safe-area-inset-bottom, 0px))`;
+  if (barFloating) {
+    wrapStyle.paddingBottom = `calc(${keyboardInset + SYMBOL_BAR_HEIGHT + 8}px + env(safe-area-inset-bottom, 0px))`;
   }
 
   return (
     <TerminalSessionLayout
       active={props.active}
       hostRef={hostRef}
-      hostStyle={Object.keys(hostStyle).length > 0 ? hostStyle : undefined}
+      wrapStyle={Object.keys(wrapStyle).length > 0 ? wrapStyle : undefined}
       connecting={connecting}
       banner={banner}
       connectingLabel={t("Connecting...")}
       barVisible={barVisible}
+      barFloating={barFloating}
       keyboardInset={keyboardInset}
       modifiers={modifiers}
       onModifier={handleModifier}
