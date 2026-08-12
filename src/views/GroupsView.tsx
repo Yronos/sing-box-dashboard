@@ -70,7 +70,7 @@ function GroupCard(props: { group: Group }) {
   };
 
   return (
-    <div className={styles.groupCard}>
+    <div className={cx(styles.groupCard, expanded && styles.expanded)}>
       <Card
         title={
           <>
