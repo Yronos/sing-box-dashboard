@@ -2,8 +2,8 @@ import type { DesktopHost } from "../app/desktop";
 
 type SharingHost = Pick<DesktopHost, "platform" | "application">;
 
-function filePart(data: Uint8Array | string): BlobPart {
-  if (typeof data === "string") {
+function filePart(data: Uint8Array | string | Blob): BlobPart {
+  if (typeof data === "string" || data instanceof Blob) {
     return data;
   }
   const copy = new Uint8Array(data.byteLength);
@@ -33,11 +33,14 @@ export function canShareFiles(host: SharingHost | null): boolean {
 export async function shareFile(
   host: SharingHost | null,
   name: string,
-  data: Uint8Array | string,
+  data: Uint8Array | string | Blob,
   type: string,
 ): Promise<void> {
   if (host?.platform === "win32") {
-    await host.application.shareFile(name, data);
+    await host.application.shareFile(
+      name,
+      data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data,
+    );
     return;
   }
   const file = new File([filePart(data)], name, { type });

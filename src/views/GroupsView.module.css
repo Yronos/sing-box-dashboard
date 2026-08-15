@@ -7,8 +7,8 @@
 }
 
 .group-card :global(.card-header) {
-  margin: calc(-1 * var(--space-20)) calc(-1 * var(--space-20)) 0;
   padding: var(--space-20) var(--space-20) var(--space-12);
+  margin: calc(-1 * var(--space-20)) calc(-1 * var(--space-20)) 0;
   background: var(--card);
   border-radius: var(--radius-card) var(--radius-card) 0 0;
 }
@@ -16,7 +16,7 @@
 .group-card.expanded :global(.card-header) {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--z-sticky-header);
 }
 
 .group-items {
@@ -128,7 +128,7 @@
     }
 
   .group-card :global(.card-header) {
-      margin: calc(-1 * var(--space-14)) calc(-1 * var(--space-14)) 0;
       padding: var(--space-14) var(--space-14) var(--space-12);
+      margin: calc(-1 * var(--space-14)) calc(-1 * var(--space-14)) 0;
     }
 }

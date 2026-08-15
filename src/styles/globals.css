@@ -109,6 +109,7 @@
   --space-56: 56px;
   --space-64: 64px;
 
+  --z-sticky-header: 10;
   --z-menu: 100;
   --z-pill: 200;
   --z-statusbar: 300;

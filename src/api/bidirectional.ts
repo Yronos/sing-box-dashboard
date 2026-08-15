@@ -64,7 +64,10 @@ class TransportBidirectionalStream<I extends DescMessage, O extends DescMessage>
     if (this.ended) {
       return;
     }
-    void this.input.write(message).catch(() => {});
+    void this.input.write(message).catch((error: unknown) => {
+      const connectError = ConnectError.from(error);
+      this.finish({ code: connectError.code, message: connectError.rawMessage });
+    });
   }
 
   close() {
