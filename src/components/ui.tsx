@@ -656,7 +656,8 @@ function useMenuPopover(
       return;
     }
     const menu = menuRef.current;
-    const anchorRect = anchorRef.current.getBoundingClientRect();
+    const anchor = anchorRef.current;
+    const anchorRect = anchor.getBoundingClientRect();
     if (width === "anchor") {
       menu.style.width = `${anchorRect.width}px`;
       menu.style.minWidth = `${anchorRect.width}px`;
@@ -665,7 +666,7 @@ function useMenuPopover(
     }
     menu.showPopover();
     const menuRect = menu.getBoundingClientRect();
-    const rightToLeft = getComputedStyle(anchorRef.current).direction === "rtl";
+    const rightToLeft = getComputedStyle(anchor).direction === "rtl";
     const alignRightEdge = alignEnd !== rightToLeft;
     let left = alignRightEdge ? anchorRect.right - menuRect.width : anchorRect.left;
     left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
@@ -676,9 +677,13 @@ function useMenuPopover(
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
     const onScroll = (event: Event) => {
-      if (!(event.target instanceof Node) || !menu.contains(event.target)) {
-        dismissRef.current();
+      if (!(event.target instanceof Node) || menu.contains(event.target)) {
+        return;
       }
+      if (!event.target.contains(anchor)) {
+        return;
+      }
+      dismissRef.current();
     };
     window.addEventListener("scroll", onScroll, true);
     return () => window.removeEventListener("scroll", onScroll, true);
