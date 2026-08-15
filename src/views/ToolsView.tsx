@@ -36,6 +36,7 @@ import {
   type STUNTestProgress,
   type TailscaleEndpointStatus,
 } from "../gen/daemon/started_service_pb";
+import { useTaildropSendSessions } from "../lib/taildropSend";
 import { allPeers, peerDisplayName, peerSSHAvailable } from "../lib/tailscaleSSH";
 import { useTailscaleSSH } from "./TailscaleSSHConnect";
 
@@ -208,9 +209,15 @@ function OpenVPNEndpointRow(props: { tag: string; showTag: boolean }) {
 }
 
 function TailscaleEndpointRow(props: { endpoint: TailscaleEndpointStatus; title: string }) {
+  const api = useApi();
   const { t } = useI18n();
   const ssh = useTailscaleSSH(props.endpoint.endpointTag);
   const sshPeers = allPeers(props.endpoint).filter(peerSSHAvailable);
+  const supportsTaildrop = useSupportsCapability("taildrop");
+  const unreadCount = supportsTaildrop ? props.endpoint.unreadFileCount : 0;
+  const hasFailedSend = useTaildropSendSessions(api, props.endpoint.endpointTag).some(
+    (session) => session.error !== "",
+  );
 
   let connectMenu: ReactNode;
   if (sshPeers.length === 1) {
@@ -237,6 +244,13 @@ function TailscaleEndpointRow(props: { endpoint: TailscaleEndpointStatus; title:
       <NavRow
         icon="hub"
         title={props.title}
+        detail={
+          hasFailedSend ? (
+            <Badge tone="danger">!</Badge>
+          ) : unreadCount > 0 ? (
+            <Badge tone="accent">{unreadCount}</Badge>
+          ) : undefined
+        }
         onClick={() =>
           navigate(`tools/tailscale/${encodeURIComponent(props.endpoint.endpointTag)}`)
         }

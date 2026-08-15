@@ -13,6 +13,7 @@ const ICONS = {
   terminal: "filled",
   settings: "filled",
   upload: "outlined",
+  upload_file: "outlined",
   download: "outlined",
   cable: "outlined",
   tune: "outlined",

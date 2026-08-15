@@ -162,6 +162,43 @@ export interface DesktopOpenConnectBrowserResult {
   headers: Array<{ name: string; values: string[] }>;
 }
 
+export interface DesktopTaildropFile {
+  name: string;
+  size: number;
+  path: string;
+}
+
+export type DesktopTaildropSendEvent =
+  | {
+      sessionID: number;
+      type: "progress";
+      fileIndex: number;
+      sentBytes: number;
+      fileCompleted: boolean;
+    }
+  | { sessionID: number; type: "finished"; code: number; error: string };
+
+export interface DesktopTaildropDownloadProgress {
+  downloadID: number;
+  transferred: number;
+  size: number;
+}
+
+export type DesktopTaildropDownloadAction = "save" | "open" | "share";
+
+export interface DesktopTaildropDownloadRequest {
+  downloadID: number;
+  endpointTag: string;
+  name: string;
+  action: DesktopTaildropDownloadAction;
+}
+
+export interface DesktopTaildropSendRequest {
+  endpointTag: string;
+  peerStableID: string;
+  files: DesktopTaildropFile[];
+}
+
 export interface DesktopHost {
   platform: string;
   appVersion(): Promise<string>;
@@ -299,6 +336,14 @@ export interface DesktopHost {
     onStateChanged(listener: (state: DesktopUpdatesState) => void): () => void;
     onPresentRequested(listener: () => void): () => void;
   };
+  taildrop: {
+    pathForFile(file: File): string;
+    startSend(sessionID: number, request: DesktopTaildropSendRequest): void;
+    cancelSend(sessionID: number): void;
+    onSendEvent(listener: (event: DesktopTaildropSendEvent) => void): () => void;
+    download(request: DesktopTaildropDownloadRequest): Promise<boolean>;
+    onDownloadProgress(listener: (progress: DesktopTaildropDownloadProgress) => void): () => void;
+  };
   // window.close() destroys sandboxed renderer webContents without emitting the host window's close event.
   application: {
     shareFile(fileName: string, data: Uint8Array | string): Promise<void>;
@@ -308,6 +353,7 @@ export interface DesktopHost {
   };
   onImportRemoteProfile(listener: (request: { name: string; url: string }) => void): () => void;
   onImportProfileFile(listener: (request: { fileName: string; data: Uint8Array }) => void): () => void;
+  onTaildropSendRequested(listener: (files: DesktopTaildropFile[]) => void): () => void;
 }
 
 export const DesktopHostContext = createContext<DesktopHost | null>(null);
