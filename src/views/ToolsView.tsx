@@ -77,6 +77,7 @@ function DebugRows() {
   const { t } = useI18n();
   const [crashUnreadCount, setCrashUnreadCount] = useState(0);
   const [oomUnreadCount, setOOMUnreadCount] = useState(0);
+  const [powerUnreadCount, setPowerUnreadCount] = useState(0);
 
   useEffect(() => {
     if (host === null) {
@@ -96,6 +97,14 @@ function DebugRows() {
       .then((reports) => {
         if (!stale) {
           setOOMUnreadCount(reports.filter((report) => !report.isRead).length);
+        }
+      })
+      .catch(() => {});
+    host.reports.power
+      .list()
+      .then((reports) => {
+        if (!stale) {
+          setPowerUnreadCount(reports.filter((report) => !report.isRead).length);
         }
       })
       .catch(() => {});
@@ -122,6 +131,12 @@ function DebugRows() {
           title={t("OOM Report")}
           detail={oomUnreadCount > 0 ? oomUnreadCount : undefined}
           onClick={() => navigate("tools/oom-reports")}
+        />
+        <NavRow
+          icon="bolt"
+          title={t("Power Report")}
+          detail={powerUnreadCount > 0 ? powerUnreadCount : undefined}
+          onClick={() => navigate("tools/power-reports")}
         />
       </div>
     </div>

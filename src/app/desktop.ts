@@ -140,6 +140,7 @@ export interface DesktopSettingsState {
   oomKillerEnabled: boolean;
   oomMemoryLimitMB: number;
   oomKillerKillConnections: boolean;
+  powerReportEnabled: boolean;
 }
 
 export type DesktopTerminalContextMenuResult =
@@ -288,6 +289,15 @@ export interface DesktopHost {
       remove(name: string): Promise<void>;
       removeAll(): Promise<void>;
     };
+    power: {
+      list(): Promise<DesktopOOMReport[]>;
+      read(name: string): Promise<DesktopOOMReportFile[]>;
+      markRead(name: string): Promise<void>;
+      exportFile(name: string, options: DesktopCrashReportExportOptions): Promise<boolean>;
+      createArchive(name: string, options: DesktopCrashReportExportOptions): Promise<DesktopReportArchive>;
+      remove(name: string): Promise<void>;
+      removeAll(): Promise<void>;
+    };
     triggerDebugCrash(type: "go" | "native"): Promise<void>;
     triggerAppCrash(type: "js" | "native"): Promise<void>;
     triggerOOMReport(): Promise<void>;
@@ -319,6 +329,7 @@ export interface DesktopHost {
     setOOMKillerEnabled(value: boolean): Promise<void>;
     setOOMMemoryLimitMB(value: number): Promise<void>;
     setOOMKillerKillConnections(value: boolean): Promise<void>;
+    setPowerReportEnabled(value: boolean): Promise<void>;
     cacheSize(): Promise<number>;
     clearCache(): Promise<void>;
   };
