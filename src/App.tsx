@@ -67,10 +67,17 @@ import {
   OOMReportListView,
 } from "./views/OOMReportsView";
 import {
+  PowerReportDetailView,
+  PowerReportFileView,
+  PowerReportListView,
+} from "./views/PowerReportsView";
+import {
   crashReportFileDisplayName,
   crashReportTitle,
   oomReportFileDisplayName,
   oomReportTitle,
+  powerReportFileDisplayName,
+  powerReportTitle,
 } from "./views/reportFormat";
 import { OverviewView } from "./views/OverviewView";
 import {
@@ -118,6 +125,9 @@ export type Route =
   | { page: "tools/oom-reports" }
   | { page: "tools/oom-reports/detail"; name: string; recordedAt: number | null }
   | { page: "tools/oom-reports/file"; name: string; file: string; recordedAt: number | null }
+  | { page: "tools/power-reports" }
+  | { page: "tools/power-reports/detail"; name: string; recordedAt: number | null }
+  | { page: "tools/power-reports/file"; name: string; file: string; recordedAt: number | null }
   | { page: "tools/openconnect"; tag: string }
   | { page: "tools/openvpn"; tag: string }
   | { page: "settings" }
@@ -217,6 +227,22 @@ function routeFromHash(locationHash: string): Route {
           }
           return { page: "tools/oom-reports" };
         }
+        case "power-reports": {
+          if (segments[2]) {
+            const atParam = query.get("at");
+            const recordedAt = atParam !== null && /^\d+$/.test(atParam) ? Number(atParam) : null;
+            if (segments[3]) {
+              return {
+                page: "tools/power-reports/file",
+                name: segments[2],
+                file: segments[3],
+                recordedAt,
+              };
+            }
+            return { page: "tools/power-reports/detail", name: segments[2], recordedAt };
+          }
+          return { page: "tools/power-reports" };
+        }
         default:
           return { page: "tools" };
       }
@@ -269,7 +295,11 @@ function isStartedOnlyToolsSubpage(page: string): boolean {
 }
 
 function isLocalReportsPage(page: string): boolean {
-  return page.startsWith("tools/crash-reports") || page.startsWith("tools/oom-reports");
+  return (
+    page.startsWith("tools/crash-reports") ||
+    page.startsWith("tools/oom-reports") ||
+    page.startsWith("tools/power-reports")
+  );
 }
 
 function routeTitle(route: Route, t: Translate, language: string): string {
@@ -312,6 +342,12 @@ function routeTitle(route: Route, t: Translate, language: string): string {
       return oomReportTitle(route.name, route.recordedAt, language);
     case "tools/oom-reports/file":
       return oomReportFileDisplayName(route.file, t);
+    case "tools/power-reports":
+      return t("Power Report");
+    case "tools/power-reports/detail":
+      return powerReportTitle(route.name, route.recordedAt, language);
+    case "tools/power-reports/file":
+      return powerReportFileDisplayName(route.file, t);
     case "settings":
       return t("Settings");
     case "settings/app":
@@ -855,6 +891,13 @@ function ShellContent(props: ShellProps & { onRetry: () => void }) {
       )}
       {route.page === "tools/oom-reports/file" && (
         <OOMReportFileView name={route.name} file={route.file} recordedAt={route.recordedAt} />
+      )}
+      {route.page === "tools/power-reports" && <PowerReportListView />}
+      {route.page === "tools/power-reports/detail" && (
+        <PowerReportDetailView name={route.name} recordedAt={route.recordedAt} />
+      )}
+      {route.page === "tools/power-reports/file" && (
+        <PowerReportFileView name={route.name} file={route.file} recordedAt={route.recordedAt} />
       )}
       {route.page === "settings" && <SettingsView />}
       {route.page === "settings/app" && (
