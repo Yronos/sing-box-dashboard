@@ -122,7 +122,6 @@ export interface DesktopUpdateInfo {
 export interface DesktopUpdatesState {
   supported: boolean;
   track: DesktopUpdateTrack;
-  stableTrackAvailable: boolean;
   checkUpdateEnabled: boolean;
   prompted: boolean;
   info: DesktopUpdateInfo | null;
